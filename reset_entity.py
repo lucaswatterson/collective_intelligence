@@ -14,6 +14,7 @@ CLEAR_DIRS = [
     ENTITY_ROOT / "files",
     ENTITY_ROOT / "memory" / "short_term",
     ENTITY_ROOT / "memory" / "long_term",
+    ENTITY_ROOT / "notes",
     ENTITY_ROOT / "public",
     ENTITY_ROOT / "tasks",
 ]

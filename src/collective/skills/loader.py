@@ -23,11 +23,13 @@ def discover_skills(skills_dir: Path) -> list[Skill]:
         return []
     skills: list[Skill] = []
     for skill_md in sorted(skills_dir.glob("*/SKILL.md")):
-        skills.append(_load_skill(skill_md))
+        if skill_md.parent.name.startswith("."):
+            continue
+        skills.append(load_skill(skill_md))
     return skills
 
 
-def _load_skill(skill_md: Path) -> Skill:
+def load_skill(skill_md: Path) -> Skill:
     parsed = frontmatter.load(skill_md)
     meta = parsed.metadata
     name = meta.get("name") or skill_md.parent.name

@@ -9,6 +9,9 @@ from collective.skills.loader import Skill, discover_skills
 from collective.skills.registry import execute, to_anthropic_tools
 
 
+MUTATING_META_SKILLS = frozenset({"create_skill", "update_skill", "delete_skill"})
+
+
 WEB_SEARCH_TOOL: dict[str, Any] = {
     "type": "web_search_20250305",
     "name": "web_search",
@@ -112,6 +115,7 @@ class Entity:
                 break
 
             tool_results = []
+            reload_skills = False
             for block in response.content:
                 if block.type != "tool_use":
                     continue
@@ -123,6 +127,8 @@ class Entity:
                     )
                 else:
                     result = execute(self.skills, block.name, block.input)
+                    if block.name in MUTATING_META_SKILLS:
+                        reload_skills = True
                 tool_results.append(
                     {
                         "type": "tool_result",
@@ -131,6 +137,12 @@ class Entity:
                     }
                 )
             self.messages.append({"role": "user", "content": tool_results})
+
+            if reload_skills:
+                self.skills = discover_skills(self.settings.skills_dir)
+                tools = [WEB_SEARCH_TOOL, WEB_FETCH_TOOL, *to_anthropic_tools(self.skills)]
+                if self.in_birth:
+                    tools = [COMMIT_IDENTITY_TOOL, *tools]
 
         final_text = "".join(
             b.text for b in response.content if b.type == "text"
