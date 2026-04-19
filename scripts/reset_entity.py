@@ -7,7 +7,7 @@ Skills are preserved — they are harness/development artifacts, not entity stat
 import shutil
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent
+REPO_ROOT = Path(__file__).resolve().parent.parent
 ENTITY_ROOT = REPO_ROOT / "entity"
 
 CLEAR_DIRS = [
