@@ -9,7 +9,8 @@ from collective.skills.loader import Skill, discover_skills
 from collective.skills.registry import execute, to_anthropic_tools
 
 
-MUTATING_META_SKILLS = frozenset({"create_skill", "update_skill", "delete_skill"})
+SKILL_RELOAD_TRIGGERS = frozenset({"create_skill", "update_skill", "delete_skill"})
+IDENTITY_RELOAD_TRIGGERS = frozenset({"update_identity"})
 
 
 WEB_SEARCH_TOOL: dict[str, Any] = {
@@ -76,15 +77,26 @@ class Entity:
 
         self.messages = []
         if not self.in_birth:
-            recents = recent_transcripts(self.settings.short_term_dir, limit=4)
+            recents = recent_transcripts(self.settings.short_term_dir, limit=2)
             current_marker = f"# Session {self.transcript.stem}"
             recents = [r for r in recents if not r.startswith(current_marker)]
+
+            index_path = self.settings.long_term_index_path
+            index_text = index_path.read_text(encoding="utf-8") if index_path.exists() else ""
+
+            parts = []
+            if index_text.strip():
+                parts.append(
+                    "Your long-term memory index. Use `read_memory` to pull any entry in full.\n\n"
+                    + index_text
+                )
             if recents:
-                memory_block = (
-                    "Notes from your recent sessions (most recent last):\n\n"
+                parts.append(
+                    "Recent session transcripts (most recent last):\n\n"
                     + "\n\n---\n\n".join(recents)
                 )
-                self.messages.append({"role": "user", "content": memory_block})
+            if parts:
+                self.messages.append({"role": "user", "content": "\n\n===\n\n".join(parts)})
                 self.messages.append(
                     {"role": "assistant", "content": "Recalled. Ready."}
                 )
@@ -116,6 +128,7 @@ class Entity:
 
             tool_results = []
             reload_skills = False
+            reload_identity = False
             for block in response.content:
                 if block.type != "tool_use":
                     continue
@@ -127,8 +140,10 @@ class Entity:
                     )
                 else:
                     result = execute(self.skills, block.name, block.input)
-                    if block.name in MUTATING_META_SKILLS:
+                    if block.name in SKILL_RELOAD_TRIGGERS:
                         reload_skills = True
+                    if block.name in IDENTITY_RELOAD_TRIGGERS:
+                        reload_identity = True
                 tool_results.append(
                     {
                         "type": "tool_result",
@@ -143,6 +158,8 @@ class Entity:
                 tools = [WEB_SEARCH_TOOL, WEB_FETCH_TOOL, *to_anthropic_tools(self.skills)]
                 if self.in_birth:
                     tools = [COMMIT_IDENTITY_TOOL, *tools]
+            if reload_identity and not self.in_birth:
+                self.system_text = self.settings.identity_path.read_text(encoding="utf-8")
 
         final_text = "".join(
             b.text for b in response.content if b.type == "text"

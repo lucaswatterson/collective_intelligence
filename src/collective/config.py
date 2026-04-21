@@ -48,6 +48,18 @@ class Settings(BaseSettings):
     def long_term_dir(self) -> Path:
         return self.entity_root / "memory" / "long_term"
 
+    @property
+    def short_term_archive_dir(self) -> Path:
+        return self.entity_root / "memory" / "short_term_archive"
+
+    @property
+    def long_term_index_path(self) -> Path:
+        return self.long_term_dir / "INDEX.md"
+
+    @property
+    def identity_history_path(self) -> Path:
+        return self.entity_root / "IDENTITY_HISTORY.md"
+
 
 def load_settings() -> Settings:
     return Settings()  # type: ignore[call-arg]
