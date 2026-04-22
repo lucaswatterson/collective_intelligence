@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +49,17 @@ COMMIT_IDENTITY_TOOL: dict[str, Any] = {
         "required": ["identity"],
     },
 }
+
+
+WORKER_PROMPT_PREFIX = (
+    "You are operating autonomously as the worker — not in chat with the human. "
+    "Complete the task below end-to-end. If the task produces artifacts, save "
+    "them under `entity/work/{slug}/`. Call `complete_task` when finished. If "
+    "you cannot finish, use `update_task` to leave a note and set status to "
+    "'blocked' (or leave as 'in-progress' if waiting on something). Do not ask "
+    "the user questions — make your best judgment and proceed.\n\n"
+    "Task file: {filename}\n\n---\n\n{task_body}"
+)
 
 
 class Entity:
@@ -106,19 +118,90 @@ class Entity:
         append_turn(self.transcript, "user", user_input)
         self.messages.append({"role": "user", "content": user_input})
 
+        final_text = self._run_tool_loop(streaming=True, on_text=on_text)
+        append_turn(self.transcript, "assistant", final_text)
+        return final_text
+
+    def work_on_task(
+        self,
+        task_path: Path,
+        *,
+        on_tool_use: Callable[[str], None] | None = None,
+    ) -> str:
+        """Run an autonomous tool-use loop against a single task file.
+
+        Resets per-task messages and transcript. Injects long-term memory
+        index as context. The entity is expected to call `complete_task`
+        (or leave progress via `update_task`) as part of the loop.
+        """
+        self.skills = discover_skills(self.settings.skills_dir)
+
+        if self.needs_birth():
+            # Birth is chat-only; worker should not run until identity exists.
+            raise RuntimeError(
+                "Entity has not been born yet; worker cannot run until IDENTITY.md is committed."
+            )
+        self.in_birth = False
+        self.system_text = self.settings.identity_path.read_text(encoding="utf-8")
+
+        raw = task_path.read_text(encoding="utf-8")
+        slug = task_path.stem
+
+        self.transcript = _start_task_session(self.settings.short_term_dir, slug)
+
+        self.messages = []
+        index_path = self.settings.long_term_index_path
+        if index_path.exists() and index_path.read_text(encoding="utf-8").strip():
+            index_text = index_path.read_text(encoding="utf-8")
+            self.messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "Your long-term memory index. Use `read_memory` to pull any "
+                        "entry in full.\n\n" + index_text
+                    ),
+                }
+            )
+            self.messages.append({"role": "assistant", "content": "Recalled. Ready."})
+
+        prompt = WORKER_PROMPT_PREFIX.format(
+            slug=slug, filename=task_path.name, task_body=raw
+        )
+        append_turn(self.transcript, "user", prompt)
+        self.messages.append({"role": "user", "content": prompt})
+
+        final_text = self._run_tool_loop(streaming=False, on_tool_use=on_tool_use)
+        append_turn(self.transcript, "assistant", final_text)
+        return final_text
+
+    def _run_tool_loop(
+        self,
+        *,
+        streaming: bool,
+        on_text: Callable[[str], None] | None = None,
+        on_tool_use: Callable[[str], None] | None = None,
+    ) -> str:
         tools = [WEB_SEARCH_TOOL, WEB_FETCH_TOOL, *to_anthropic_tools(self.skills)]
         if self.in_birth:
             tools = [COMMIT_IDENTITY_TOOL, *tools]
 
         response = None
         while True:
-            response = self.client.stream_turn(
-                model=Models.DEFAULT,
-                system=cached_system(self.system_text),
-                messages=self.messages,
-                tools=tools or None,
-                on_text=on_text,
-            )
+            if streaming:
+                response = self.client.stream_turn(
+                    model=Models.DEFAULT,
+                    system=cached_system(self.system_text),
+                    messages=self.messages,
+                    tools=tools or None,
+                    on_text=on_text,
+                )
+            else:
+                response = self.client.create_turn(
+                    model=Models.DEFAULT,
+                    system=cached_system(self.system_text),
+                    messages=self.messages,
+                    tools=tools or None,
+                )
             self.messages.append({"role": "assistant", "content": response.content})
 
             if response.stop_reason == "pause_turn":
@@ -132,6 +215,8 @@ class Entity:
             for block in response.content:
                 if block.type != "tool_use":
                     continue
+                if on_tool_use:
+                    on_tool_use(block.name)
                 if self.in_birth and block.name == "commit_identity":
                     self._commit_identity(block.input["identity"])
                     result = (
@@ -161,13 +246,17 @@ class Entity:
             if reload_identity and not self.in_birth:
                 self.system_text = self.settings.identity_path.read_text(encoding="utf-8")
 
-        final_text = "".join(
-            b.text for b in response.content if b.type == "text"
-        )
-        append_turn(self.transcript, "assistant", final_text)
-        return final_text
+        return "".join(b.text for b in response.content if b.type == "text")
 
     def _commit_identity(self, identity_text: str) -> None:
         self.settings.identity_path.write_text(identity_text, encoding="utf-8")
         self.system_text = identity_text
         self.in_birth = False
+
+
+def _start_task_session(short_term_dir: Path, slug: str) -> Path:
+    short_term_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+    path = short_term_dir / f"{stamp}_task_{slug}.md"
+    path.write_text(f"# Task Session {stamp} · {slug}\n\n", encoding="utf-8")
+    return path

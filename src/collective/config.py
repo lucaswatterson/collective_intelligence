@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     anthropic_api_key: str = Field(..., alias="ANTHROPIC_API_KEY")
+    worker_poll_interval: float = Field(10.0, alias="WORKER_POLL_INTERVAL")
 
     repo_root: Path = REPO_ROOT
     entity_root: Path = ENTITY_ROOT
@@ -41,6 +42,14 @@ class Settings(BaseSettings):
         return self.entity_root / "skills"
 
     @property
+    def tasks_dir(self) -> Path:
+        return self.entity_root / "tasks"
+
+    @property
+    def work_dir(self) -> Path:
+        return self.entity_root / "work"
+
+    @property
     def short_term_dir(self) -> Path:
         return self.entity_root / "memory" / "short_term"
 
@@ -59,6 +68,10 @@ class Settings(BaseSettings):
     @property
     def identity_history_path(self) -> Path:
         return self.entity_root / "IDENTITY_HISTORY.md"
+
+    @property
+    def self_image_path(self) -> Path:
+        return self.entity_root / "self_image.txt"
 
 
 def load_settings() -> Settings:
