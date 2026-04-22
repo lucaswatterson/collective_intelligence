@@ -5,7 +5,9 @@ import threading
 import time
 import tty
 from datetime import datetime
+from pathlib import Path
 
+import frontmatter
 from rich.console import Console, ConsoleOptions, Group, RenderResult
 from rich.layout import Layout
 from rich.live import Live
@@ -13,8 +15,8 @@ from rich.panel import Panel
 from rich.segment import Segment
 from rich.text import Text
 
-from collective.entity import Entity
-from collective.runtime.status import WorkerStatus
+from harness.entity import Entity
+from harness.runtime.status import WorkerStatus
 
 
 BANNER_BORN = "entity online · type and press enter · Ctrl-C to quit · tasks running"
@@ -198,25 +200,68 @@ def _self_image_panel(entity: Entity) -> Panel:
     return Panel(body, border_style="magenta", padding=(0, 1))
 
 
-def _tasks_panel(status: WorkerStatus) -> Panel:
-    snap = status.snapshot()
-    if snap.idle:
-        body: Group | Text = Text("💤 idle\nwatching for tasks", style="dim")
-        return Panel(body, title="tasks", border_style="grey50", padding=(1, 1))
+_PRIORITY_ORDER = {"high": 0, "medium": 1, "low": 2}
+_PRIORITY_LABEL: dict[str, tuple[str, str]] = {
+    "high": ("[H]", "red"),
+    "medium": ("[M]", "yellow"),
+    "low": ("[L]", "dim"),
+}
 
-    lines: list[Text] = [
-        Text.assemble(("⚙ ", "cyan"), (snap.current_task or "?", "bold cyan")),
-    ]
-    if snap.current_filename:
-        lines.append(Text(snap.current_filename, style="dim"))
-    lines.append(Text(""))
-    lines.append(Text.assemble(("step  ", "dim"), (str(snap.step), "white")))
-    if snap.last_tool:
-        lines.append(Text.assemble(("tool  ", "dim"), (snap.last_tool, "magenta")))
-    if snap.started_at is not None:
-        secs = int((datetime.now() - snap.started_at).total_seconds())
-        lines.append(Text.assemble(("time  ", "dim"), (f"{secs}s", "white")))
-    return Panel(Group(*lines), title="tasks", border_style="cyan", padding=(1, 1))
+
+def _pending_tasks(tasks_dir: Path) -> list[dict]:
+    tasks = []
+    if not tasks_dir.exists():
+        return tasks
+    for path in sorted(tasks_dir.glob("*.md")):
+        if path.name.startswith("."):
+            continue
+        try:
+            post = frontmatter.load(path)
+            fm = post.metadata or {}
+            if fm.get("status") == "todo":
+                tasks.append({
+                    "title": fm.get("title", path.stem),
+                    "priority": str(fm.get("priority", "medium")),
+                    "created": str(fm.get("created", "")),
+                })
+        except Exception:
+            continue
+    tasks.sort(key=lambda t: (_PRIORITY_ORDER.get(t["priority"], 1), t["created"]))
+    return tasks
+
+
+def _tasks_panel(status: WorkerStatus, tasks_dir: Path) -> Panel:
+    snap = status.snapshot()
+    pending = _pending_tasks(tasks_dir)
+
+    lines: list[Text] = []
+
+    if snap.idle:
+        lines.append(Text("💤 idle\nwatching for tasks", style="dim"))
+    else:
+        lines.append(Text.assemble(("⚙ ", "cyan"), (snap.current_task or "?", "bold cyan")))
+        if snap.current_filename:
+            lines.append(Text(snap.current_filename, style="dim"))
+        lines.append(Text(""))
+        lines.append(Text.assemble(("step  ", "dim"), (str(snap.step), "white")))
+        if snap.last_tool:
+            lines.append(Text.assemble(("tool  ", "dim"), (snap.last_tool, "magenta")))
+        if snap.started_at is not None:
+            secs = int((datetime.now() - snap.started_at).total_seconds())
+            lines.append(Text.assemble(("time  ", "dim"), (f"{secs}s", "white")))
+
+    if pending:
+        lines.append(Text(""))
+        lines.append(Text("── queued ──────────", style="dim"))
+        for task in pending[:5]:
+            pri = task["priority"]
+            label, color = _PRIORITY_LABEL.get(pri, ("[M]", "yellow"))
+            lines.append(Text.assemble((label + " ", color), (task["title"], "dim")))
+        if len(pending) > 5:
+            lines.append(Text(f"  … {len(pending) - 5} more", style="dim"))
+
+    border = "grey50" if snap.idle else "cyan"
+    return Panel(Group(*lines), title="tasks", border_style=border, padding=(1, 1))
 
 
 def _read_escape() -> str | None:
@@ -254,6 +299,7 @@ def run_tui(
     entity: Entity,
     status: WorkerStatus,
     stop_event: threading.Event,
+    tasks_dir: Path,
 ) -> None:
     console = Console()
     entity.begin_session()
@@ -281,7 +327,7 @@ def run_tui(
         layout["chat_body"].update(_chat_body_panel(buffer))
         layout["chat_input"].update(_chat_input_panel(input_state))
         layout["self_image"].update(_self_image_panel(entity))
-        layout["tasks"].update(_tasks_panel(status))
+        layout["tasks"].update(_tasks_panel(status, tasks_dir))
 
     refresh()
 

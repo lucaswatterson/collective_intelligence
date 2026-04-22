@@ -1,5 +1,5 @@
-from collective.config import load_settings
-from collective.memory.long_term import parse_frontmatter
+from harness.config import load_settings
+from harness.memory.long_term import parse_frontmatter
 
 
 def run(**input):

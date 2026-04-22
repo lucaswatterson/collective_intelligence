@@ -11,18 +11,18 @@ Read from here rather than guessing from `src/`.
 ## 1. What the harness is
 
 You live inside a Python package called **Collective Intelligence**
-(`src/collective/`). A single process starts you: `main.py` at the repo
+(`harness/`). A single process starts you: `main.py` at the repo
 root. The harness owns five things on your behalf:
 
 - **The event loop** — when you're awake, what you're doing, when you stop.
 - **The Claude API bridge** — every token you produce goes through
-  `src/collective/client.py`.
+  `harness/client.py`.
 - **The skill registry** — your capabilities, loaded from
   `entity/skills/` into Claude tool-use schemas.
 - **Memory I/O** — session transcripts and long-term notes, read and
   written as plain markdown under `entity/memory/`.
 - **The filesystem contract** — every path you touch is derived from a
-  single `Settings` object (`src/collective/config.py`).
+  single `Settings` object (`harness/config.py`).
 
 You do not manage any of this yourself. You produce text and tool calls;
 the harness translates them into filesystem changes, API requests, and
@@ -51,7 +51,7 @@ thread.
 Autonomous background execution of tasks from `entity/tasks/`. No
 human in the loop. Streaming is off — the harness calls
 `messages.create` and waits for the full response. Driven by
-`src/collective/runtime/worker.py`. Only runs once you are born.
+`harness/runtime/worker.py`. Only runs once you are born.
 
 Chat and worker share almost all machinery but use **separate `Entity`
 instances** (see §3). A chat turn never sees worker messages and vice
@@ -81,7 +81,7 @@ ticker keeps updating while you think.
 
 ## 4. `Entity` lifecycle
 
-All of your behavior is in `src/collective/entity.py`. The `Entity`
+All of your behavior is in `harness/entity.py`. The `Entity`
 class has four public methods.
 
 ### `needs_birth() -> bool`
@@ -147,7 +147,7 @@ The loop ends when the model stops requesting tools.
 
 ## 5. The Claude bridge
 
-`src/collective/client.py` is thin. `EntityClient` wraps
+`harness/client.py` is thin. `EntityClient` wraps
 `anthropic.Anthropic` and exposes two methods:
 
 - `stream_turn(...)` — used in chat. Streams text chunks to an
@@ -230,7 +230,7 @@ turn.
 Two layers, both plain markdown on disk.
 
 ### Short-term
-`src/collective/memory/store.py` owns session transcripts.
+`harness/memory/store.py` owns session transcripts.
 
 - `start_session(short_term_dir)` creates
   `entity/memory/short_term/YYYY-MM-DDTHH-MM-SS.md` with a header and
@@ -245,7 +245,7 @@ Task sessions look the same but are named `..._task_<slug>.md` so
 they're distinguishable.
 
 ### Long-term
-`src/collective/memory/long_term.py` handles the consolidated layer.
+`harness/memory/long_term.py` handles the consolidated layer.
 
 - Files live in `entity/memory/long_term/`. Each has YAML
   frontmatter: `title`, `category` (one of `user`, `self`,
@@ -267,7 +267,7 @@ doesn't schedule it — you do, when it matters.
 
 ## 8. The worker loop
 
-`src/collective/runtime/worker.py` defines `run_worker(...)`, the
+`harness/runtime/worker.py` defines `run_worker(...)`, the
 daemon loop that consumes tasks.
 
 ### Picking a task
@@ -305,7 +305,7 @@ For each task:
 `stop_event` is how the TUI tells the worker to quit on exit.
 
 ### Shared status
-`src/collective/runtime/status.py` is a `threading.Lock`-protected
+`harness/runtime/status.py` is a `threading.Lock`-protected
 `WorkerSnapshot` dataclass: `idle`, `current_task`, `current_filename`,
 `step`, `last_tool`, `started_at`. Every tool call the worker makes
 increments `step` and records `last_tool` — that's what you see move
@@ -313,7 +313,7 @@ in the "tasks" panel.
 
 ## 9. The TUI
 
-`src/collective/ui/tui.py` is built on `rich.live.Live` with a two-pane
+`harness/ui/tui.py` is built on `rich.live.Live` with a two-pane
 layout (chat 2:1 tasks, tasks panel minimum 28 cols).
 
 ### Threads
@@ -347,7 +347,7 @@ in real time.
 
 ## 10. The filesystem contract
 
-Every path is a property on `Settings` (`src/collective/config.py`).
+Every path is a property on `Settings` (`harness/config.py`).
 You own these, under `entity/`:
 
 - `IDENTITY.md` — your system prompt once born. See `BIRTH.md` for
@@ -426,6 +426,6 @@ first prompt:
 
 ---
 
-If something in this file ever drifts from the code in `src/collective/`,
+If something in this file ever drifts from the code in `harness/`,
 trust the code and update this file. The harness is the territory;
 this document is the map.

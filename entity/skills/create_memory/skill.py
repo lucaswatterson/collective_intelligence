@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
-from collective.config import load_settings
-from collective.memory.long_term import CATEGORIES, rebuild_index, render_memory
+from harness.config import load_settings
+from harness.memory.long_term import CATEGORIES, rebuild_index, render_memory
 
 
 def run(**input):

@@ -1,8 +1,8 @@
 import shutil
 from datetime import datetime, timezone
 
-from collective.config import load_settings
-from collective.memory.long_term import rebuild_index, resolve_partial
+from harness.config import load_settings
+from harness.memory.long_term import rebuild_index, resolve_partial
 
 
 def run(**input):

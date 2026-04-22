@@ -6,8 +6,8 @@ from pathlib import Path
 
 import frontmatter
 
-from collective.entity import Entity
-from collective.runtime.status import WorkerStatus
+from harness.entity import Entity
+from harness.runtime.status import WorkerStatus
 
 
 log = logging.getLogger(__name__)
@@ -82,8 +82,20 @@ def run_worker(
     `entity.work_on_task`, which is expected to complete or update it via
     its own skills. If the entity raises, the task is marked blocked.
     """
-    log.info("worker starting; polling %s every %.1fs", tasks_dir, poll_interval)
+    log.info("worker starting")
+    waiting_logged = False
+    ready_logged = False
     while not stop_event.is_set():
+        if entity.needs_birth():
+            if not waiting_logged:
+                log.info("worker waiting for birth")
+                waiting_logged = True
+            stop_event.wait(poll_interval)
+            continue
+        if not ready_logged:
+            log.info("worker ready; polling %s every %.1fs", tasks_dir, poll_interval)
+            ready_logged = True
+
         task = _next_todo(tasks_dir)
         if task is None:
             stop_event.wait(poll_interval)
@@ -107,6 +119,25 @@ def run_worker(
             # completed/archived by the entity mid-run).
             if task.path.exists():
                 _set_status(task.path, "blocked", note=f"Worker exception:\n```\n{tb}\n```")
+        else:
+            # Task loop finished cleanly but the entity never called
+            # complete_task/update_task. Don't leave it silently stuck —
+            # mark blocked so it shows up on next triage.
+            if task.path.exists():
+                try:
+                    post = frontmatter.load(task.path)
+                    if (post.metadata or {}).get("status") == "in-progress":
+                        log.warning(
+                            "task %s returned from entity but was not completed or updated",
+                            task.path.name,
+                        )
+                        _set_status(
+                            task.path,
+                            "blocked",
+                            note="Entity finished its turn without calling `complete_task` or `update_task`. Check worker.log for stop_reason.",
+                        )
+                except Exception:
+                    log.exception("failed post-task status check on %s", task.path.name)
         finally:
             status.finish()
 

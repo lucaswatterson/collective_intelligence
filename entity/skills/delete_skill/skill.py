@@ -1,5 +1,5 @@
-from collective.config import load_settings
-from collective.skills.meta import MetaSkillError, archive_skill
+from harness.config import load_settings
+from harness.skills.meta import MetaSkillError, archive_skill
 
 
 def run(**input) -> str:

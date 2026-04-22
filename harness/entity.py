@@ -1,13 +1,18 @@
+import logging
+from collections import Counter
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from collective.client import EntityClient, cached_system
-from collective.config import Models, Settings
-from collective.memory.store import append_turn, recent_transcripts, start_session
-from collective.skills.loader import Skill, discover_skills
-from collective.skills.registry import execute, to_anthropic_tools
+from harness.client import EntityClient, cached_system
+from harness.config import Models, Settings
+from harness.memory.store import append_turn, recent_transcripts, start_session
+from harness.skills.loader import Skill, discover_skills
+from harness.skills.registry import execute, to_anthropic_tools
+
+
+log = logging.getLogger(__name__)
 
 
 SKILL_RELOAD_TRIGGERS = frozenset({"create_skill", "update_skill", "delete_skill"})
@@ -118,7 +123,7 @@ class Entity:
         append_turn(self.transcript, "user", user_input)
         self.messages.append({"role": "user", "content": user_input})
 
-        final_text = self._run_tool_loop(streaming=True, on_text=on_text)
+        final_text = self._run_tool_loop(on_text=on_text)
         append_turn(self.transcript, "assistant", final_text)
         return final_text
 
@@ -170,14 +175,13 @@ class Entity:
         append_turn(self.transcript, "user", prompt)
         self.messages.append({"role": "user", "content": prompt})
 
-        final_text = self._run_tool_loop(streaming=False, on_tool_use=on_tool_use)
+        final_text = self._run_tool_loop(on_tool_use=on_tool_use)
         append_turn(self.transcript, "assistant", final_text)
         return final_text
 
     def _run_tool_loop(
         self,
         *,
-        streaming: bool,
         on_text: Callable[[str], None] | None = None,
         on_tool_use: Callable[[str], None] | None = None,
     ) -> str:
@@ -187,22 +191,23 @@ class Entity:
 
         response = None
         while True:
-            if streaming:
-                response = self.client.stream_turn(
-                    model=Models.DEFAULT,
-                    system=cached_system(self.system_text),
-                    messages=self.messages,
-                    tools=tools or None,
-                    on_text=on_text,
-                )
-            else:
-                response = self.client.create_turn(
-                    model=Models.DEFAULT,
-                    system=cached_system(self.system_text),
-                    messages=self.messages,
-                    tools=tools or None,
-                )
+            response = self.client.stream_turn(
+                model=Models.DEFAULT,
+                system=cached_system(self.system_text),
+                messages=self.messages,
+                tools=tools or None,
+                on_text=on_text,
+            )
             self.messages.append({"role": "assistant", "content": response.content})
+
+            block_types = Counter(b.type for b in response.content)
+            tool_names = [b.name for b in response.content if b.type == "tool_use"]
+            log.info(
+                "turn: stop_reason=%s blocks=%s tools=%s",
+                response.stop_reason,
+                dict(block_types),
+                tool_names,
+            )
 
             if response.stop_reason == "pause_turn":
                 continue

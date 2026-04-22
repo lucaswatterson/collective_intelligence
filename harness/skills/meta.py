@@ -7,7 +7,7 @@ from typing import Any
 
 import frontmatter
 
-from collective.skills.loader import load_skill
+from harness.skills.loader import load_skill
 
 
 META_SKILL_NAMES: frozenset[str] = frozenset(

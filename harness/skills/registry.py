@@ -1,6 +1,6 @@
 from typing import Any
 
-from collective.skills.loader import Skill
+from harness.skills.loader import Skill
 
 
 def to_anthropic_tools(skills: list[Skill]) -> list[dict[str, Any]]:

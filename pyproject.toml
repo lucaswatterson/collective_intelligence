@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/collective"]
+packages = ["harness"]
 
 [build-system]
 requires = ["hatchling"]

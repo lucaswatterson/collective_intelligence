@@ -1,6 +1,6 @@
 import shutil
 from datetime import datetime, timezone
-from collective.config import load_settings
+from harness.config import load_settings
 
 
 def run(**input):

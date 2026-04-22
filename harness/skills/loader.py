@@ -42,7 +42,7 @@ def load_skill(skill_md: Path) -> Skill:
             f"Skill '{name}' is missing skill.py at {skill_py}"
         )
 
-    module_name = f"_collective_skill_{name}"
+    module_name = f"_harness_skill_{name}"
     spec = importlib.util.spec_from_file_location(module_name, skill_py)
     if spec is None or spec.loader is None:
         raise ImportError(f"Could not load skill module for {name}")

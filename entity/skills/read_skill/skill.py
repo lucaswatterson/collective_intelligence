@@ -1,7 +1,7 @@
 import json
 
-from collective.config import load_settings
-from collective.skills.meta import MetaSkillError, read_skill_files
+from harness.config import load_settings
+from harness.skills.meta import MetaSkillError, read_skill_files
 
 
 def run(**input) -> str:

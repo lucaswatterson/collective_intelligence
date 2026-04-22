@@ -1,5 +1,5 @@
-from collective.config import load_settings
-from collective.memory.long_term import resolve_partial
+from harness.config import load_settings
+from harness.memory.long_term import resolve_partial
 
 
 def run(**input):

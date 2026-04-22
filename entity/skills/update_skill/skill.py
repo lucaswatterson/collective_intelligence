@@ -1,5 +1,5 @@
-from collective.config import load_settings
-from collective.skills.meta import (
+from harness.config import load_settings
+from harness.skills.meta import (
     MetaSkillError,
     commit_staged_skill,
     read_skill_files,

@@ -1,5 +1,5 @@
-from collective.config import load_settings
-from collective.skills.loader import discover_skills
+from harness.config import load_settings
+from harness.skills.loader import discover_skills
 
 
 def run(**input) -> str:

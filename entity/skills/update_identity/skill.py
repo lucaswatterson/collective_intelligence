@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from collective.config import load_settings
+from harness.config import load_settings
 
 
 GUARD_CHARS = 200
