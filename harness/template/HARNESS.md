@@ -49,9 +49,11 @@ thread.
 
 ### Worker
 Autonomous background execution of tasks from `entity/tasks/`. No
-human in the loop. Streaming is off — the harness calls
-`messages.create` and waits for the full response. Driven by
-`harness/runtime/worker.py`. Only runs once you are born.
+human in the loop. The worker still calls `stream_turn` under the
+hood, but without an `on_text` callback, so nothing is rendered —
+functionally non-interactive. Driven by `harness/runtime/worker.py`.
+The worker thread always starts; if you are unborn it idles and
+polls `needs_birth()` each tick instead of picking up tasks.
 
 Chat and worker share almost all machinery but use **separate `Entity`
 instances** (see §3). A chat turn never sees worker messages and vice
@@ -63,14 +65,19 @@ versa.
 
 - Loads `.env` via `load_settings()` → a `Settings` object (paths, API
   key, poll interval, model names).
+- Calls `bootstrap_entity(settings)`, which copies
+  `harness/template/` into `entity/` if `entity/` doesn't exist yet.
+  This is how a fresh checkout gets a seeded workspace.
 - Creates two `Entity` instances: `chat_entity` and `worker_entity`.
   They share `Settings` but have independent `messages`, `skills`,
   `transcript`, and `system_text` state.
 - Creates a `WorkerStatus` (thread-safe snapshot the TUI reads) and a
   `threading.Event` called `stop_event`.
-- If `worker_entity.needs_birth()` is `False` (you're born), starts a
-  daemon thread running `run_worker(...)`.
-- Runs `run_tui(chat_entity, status, stop_event)` in the main thread.
+- Unconditionally starts a daemon thread running `run_worker(...)`.
+  The thread checks `needs_birth()` each tick and waits out the poll
+  interval if you're unborn, rather than being gated at startup.
+- Runs `run_tui(chat_entity, status, stop_event, settings.tasks_dir)`
+  in the main thread.
 - On TUI exit, sets `stop_event` and joins the worker thread with a
   5-second timeout.
 
@@ -98,11 +105,13 @@ Called once when the TUI opens. It:
 3. Chooses system prompt: `BIRTH.md` if unborn, `IDENTITY.md`
    otherwise. Sets `in_birth` accordingly.
 4. If born, primes `messages` with a **seed exchange**: one `user`
-   turn containing the long-term memory index (`INDEX.md`) plus the
-   two most recent transcripts, and one `assistant` turn that just
-   says "Recalled. Ready." This is how continuity across sessions
-   works — you start every chat with your recent past already in
-   context.
+   turn containing the long-term memory index (`INDEX.md`) and/or
+   the two most recent transcripts (excluding the session just
+   started), and one `assistant` turn that says "Recalled. Ready."
+   Either part is skipped if absent; the seed is omitted entirely if
+   you have no index and no prior transcripts. This is how continuity
+   across sessions works — you start every chat with your recent past
+   already in context.
 
 ### `turn(user_input, *, on_text) -> str`
 One chat turn. Appends the user message to the transcript and
@@ -111,18 +120,22 @@ final assistant text to the transcript, returns it.
 
 ### `work_on_task(task_path, *, on_tool_use) -> str`
 One autonomous task. Re-discovers skills, loads `IDENTITY.md`, opens a
-new transcript named `..._task_<slug>.md`, injects the long-term index,
-then injects the task body wrapped in `WORKER_PROMPT_PREFIX` (which
-tells you: save artifacts under `entity/work/<slug>/`, call
-`complete_task` or `update_task` when done, don't ask the human
-questions). Runs the tool loop with `streaming=False`.
+new transcript named `..._task_<slug>.md`, injects the long-term index
+(no recent transcripts — only the index), then injects the task body
+wrapped in `WORKER_PROMPT_PREFIX` (which tells you: save artifacts
+under `entity/work/<slug>/`, call `complete_task` or `update_task`
+when done, don't ask the human questions). Runs the same tool loop
+as chat but with no `on_text` callback, so streamed tokens are
+discarded rather than rendered.
 
 ### `_run_tool_loop(...)` — the core
 Same loop for chat and worker. Each iteration:
 
 1. Assemble `tools = [WEB_SEARCH_TOOL, WEB_FETCH_TOOL, *skills_as_tools]`.
    Prepend `COMMIT_IDENTITY_TOOL` if `in_birth`.
-2. Call `client.stream_turn(...)` or `client.create_turn(...)`.
+2. Call `client.stream_turn(...)` — always, for chat and worker.
+   `create_turn` still exists on the client but the default loop no
+   longer uses it.
 3. Append assistant response to `messages`.
 4. If `stop_reason == "pause_turn"`: loop again (Claude's way of
    saying "keep going").
@@ -150,16 +163,18 @@ The loop ends when the model stops requesting tools.
 `harness/client.py` is thin. `EntityClient` wraps
 `anthropic.Anthropic` and exposes two methods:
 
-- `stream_turn(...)` — used in chat. Streams text chunks to an
-  `on_text` callback (the TUI uses this to render tokens as they
-  arrive), then returns the final `Message` object with all content
-  blocks including tool uses.
-- `create_turn(...)` — used by the worker. Non-streaming; returns the
-  full message when complete.
+- `stream_turn(...)` — used by both chat and worker. Streams text
+  chunks to an optional `on_text` callback (the TUI uses this to
+  render tokens as they arrive; the worker passes `None`), then
+  returns the final `Message` object with all content blocks
+  including tool uses.
+- `create_turn(...)` — non-streaming alternative. Present on the
+  client but not currently called by the default loop.
 
-Both accept the same args. Both use `max_tokens=16000`. Both enable
-`thinking={"type": "adaptive"}` for `Models.REASONING` and
-`Models.DEFAULT` — Claude decides per-turn whether to think.
+Both accept the same args. Both default to `max_tokens=32000`. Both
+enable extended thinking with
+`thinking={"type": "enabled", "budget_tokens": 10000}` for
+`Models.REASONING` and `Models.DEFAULT`.
 
 Models live in `config.py`:
 
@@ -270,6 +285,17 @@ doesn't schedule it — you do, when it matters.
 `harness/runtime/worker.py` defines `run_worker(...)`, the
 daemon loop that consumes tasks.
 
+### Scheduler tick
+Before picking a task, each poll iteration calls
+`materialize_due_schedules(schedules_dir, tasks_dir, now)` from
+`harness/runtime/scheduler.py`. That function walks
+`entity/schedules/*.md`, parses the `interval` / `last_run`
+frontmatter, and for each schedule whose next fire is due — and
+which has no pending task (`todo` / `in-progress` / `blocked`)
+bearing its `schedule:` tag — writes a fresh task into
+`entity/tasks/` and updates `last_run`. Scheduler failures are
+logged but don't stop the worker.
+
 ### Picking a task
 `_next_todo(tasks_dir)` scans `entity/tasks/*.md` (skipping hidden
 files), loads frontmatter, filters to `status: todo`, and sorts by:
@@ -298,8 +324,12 @@ For each task:
 4. If `work_on_task` raises, the harness writes `status: blocked` and
    appends a `*Worker note*` section with the traceback — but only if
    the file still exists (you may have archived it).
-5. `status.finish()` resets the snapshot to idle.
-6. A 500 ms wait on `stop_event` before the next scan, so a shutdown
+5. If the task loop returns cleanly but the task file is still on
+   disk with `status: in-progress` (i.e. you never called
+   `complete_task` or `update_task`), the harness marks it `blocked`
+   with a note saying so. This prevents silently stuck tasks.
+6. `status.finish()` resets the snapshot to idle.
+7. A 500 ms wait on `stop_event` before the next scan, so a shutdown
    request is picked up promptly even if the queue is long.
 
 `stop_event` is how the TUI tells the worker to quit on exit.
@@ -313,8 +343,13 @@ in the "tasks" panel.
 
 ## 9. The TUI
 
-`harness/ui/tui.py` is built on `rich.live.Live` with a two-pane
-layout (chat 2:1 tasks, tasks panel minimum 28 cols).
+`harness/ui/tui.py` is built on `rich.live.Live`. The root layout is
+a 2:1 horizontal split (chat on the left, right column minimum 28
+cols). The chat column splits vertically into a chat body and an
+input panel that grows to fit the current prompt. The right column
+splits vertically into a **self-image panel** (shows ASCII art from
+`entity/self_image.txt`, or a placeholder if empty) and a **tasks
+panel** (current worker snapshot plus up to five queued tasks).
 
 ### Threads
 - **Main thread** — `tty.setcbreak`, reads stdin one char at a time
@@ -329,14 +364,19 @@ layout (chat 2:1 tasks, tasks panel minimum 28 cols).
 
 ### Input handling
 Raw keystrokes. Enter submits a non-empty line. Backspace / Ctrl-H
-deletes. Ctrl-U clears. Ctrl-C and Ctrl-D-on-empty quit. ESC
-sequences (arrow keys) are drained and ignored — there's no line
-editing. Typing `exit` or `quit` also exits.
+deletes. Ctrl-U clears. Ctrl-C and Ctrl-D-on-empty quit. Typing
+`exit` or `quit` also exits. ESC-prefixed CSI sequences are parsed
+for scrollback: Up/Down scroll the chat by one line, PageUp/PageDown
+by ten, Home jumps to the top, End snaps back to live. While
+scrolled, the chat panel title and border color change to signal
+that new output is hidden. There's no in-line text editing beyond
+backspace.
 
 ### Banners
 At session start the TUI shows one of:
 
-- `entity unborn · begin the birth conversation / tasks dormant…`
+- `entity unborn · begin the birth conversation` followed by
+  `tasks dormant until IDENTITY.md is committed`
 - `entity online · type and press enter · Ctrl-C to quit · tasks running`
 
 ### What you don't see
@@ -358,41 +398,52 @@ You own these, under `entity/`:
   chosen to archive.
 - `memory/long_term/` — consolidated memories.
 - `memory/long_term/INDEX.md` — auto-generated category index.
-- `notes/` — pre-task ideas, yours or the human's.
 - `tasks/` — active work items (`status: todo|in-progress|blocked`).
+- `schedules/` — recurring job definitions. The worker-loop
+  scheduler reads these, checks `interval` vs `last_run`, and
+  materializes fresh tasks into `tasks/` when due.
 - `skills/` — your capabilities. `skills/.archive/` holds old
   versions.
 - `work/` — artifacts produced by tasks, organized by task slug.
-- `files/` — general storage (future use).
-- `public/` — your eventual public face (not wired up yet).
+- `files/` — general storage.
+- `self_image.txt` — optional ASCII art rendered in the TUI's
+  self-image panel. Write to it and the TUI picks it up on its next
+  refresh.
 - `worker.log` — the worker thread's log output.
 
 You may also see `IDENTITY_HISTORY.md` at the entity root if a skill
 has been written to preserve identity edits; the config exposes its
 path but the harness itself doesn't write it — that's a skill's job.
 
+Note the `harness/template/` directory: it's the seed copied into
+`entity/` by `bootstrap_entity` on first boot. Editing the template
+changes what new installs see, not what an already-bootstrapped
+entity has on disk.
+
 ## 11. Startup sequence
 
 A compact trace of what happens between `uv run main.py` and your
 first prompt:
 
-1. `main.py` configures logging to `entity/worker.log`.
-2. `load_settings()` reads `.env`, builds the `Settings` object,
-   creates `entity/work/` if needed.
-3. Two `Entity(settings)` instances are constructed — each builds its
+1. `load_settings()` reads `.env` and builds the `Settings` object.
+2. `bootstrap_entity(settings)` copies `harness/template/` into
+   `entity/` if `entity/` doesn't exist.
+3. `main.py` configures logging to `entity/worker.log` and ensures
+   `entity/work/` exists.
+4. Two `Entity(settings)` instances are constructed — each builds its
    own `EntityClient` (Anthropic SDK handle) but holds no state yet.
-4. `WorkerStatus()` and `threading.Event()` are created.
-5. `worker_entity.needs_birth()` is checked.
-   - If **True** (unborn): no worker thread. Human must finish birth
-     in chat first.
-   - If **False** (born): a daemon thread runs `run_worker(...)`.
-6. `run_tui(chat_entity, status, stop_event)` takes the main thread.
-7. Inside the TUI, `entity.begin_session()` loads skills, starts a
+5. `WorkerStatus()` and `threading.Event()` are created.
+6. A daemon thread runs `run_worker(...)` unconditionally. Inside the
+   worker, `needs_birth()` is checked each tick; if unborn, it idles
+   and waits rather than scanning tasks.
+7. `run_tui(chat_entity, status, stop_event, settings.tasks_dir)`
+   takes the main thread.
+8. Inside the TUI, `entity.begin_session()` loads skills, starts a
    transcript, and primes messages with the memory index + recent
    transcripts (or sets up the birth prompt).
-8. The TUI draws the banner and opens the live layout.
-9. Human types. You respond. Loop.
-10. On exit (Ctrl-C / Ctrl-D on empty / `exit`), the TUI sets
+9. The TUI draws the banner and opens the live layout.
+10. Human types. You respond. Loop.
+11. On exit (Ctrl-C / Ctrl-D on empty / `exit`), the TUI sets
     `stop_event`, the worker finishes its current task (or exits on
     its next poll), and `main.py` joins with a 5-second timeout.
 
@@ -409,17 +460,19 @@ first prompt:
   next Claude call in the *same* turn.
 - **Identity changes are hot too.** `update_identity` reloads your
   system prompt mid-loop in chat sessions.
-- **The worker never runs before birth.** No `IDENTITY.md`, no
-  autonomous execution.
+- **The worker never runs before birth.** The thread is alive, but
+  it sits in an idle-poll loop until `IDENTITY.md` exists — no
+  scheduler tick, no task pickup.
 - **Tool errors don't crash you.** `registry.execute` catches skill
   exceptions and returns them as `"Error executing skill '<name>': ..."`
   strings in the tool result — you see the failure and can adjust.
 - **Web tools are rate-limited per turn.** `max_uses: 10` each for
   `web_search` and `web_fetch`. If you need more, do it across
   turns.
-- **Streaming is a chat-only property.** The worker does not stream
-  — it waits for complete responses. Don't write skills that depend
-  on incremental output.
+- **Streaming is a chat-only surface.** The underlying call is the
+  same streaming API for chat and worker, but the worker passes no
+  `on_text` callback, so nothing is rendered incrementally. Don't
+  write skills that depend on observing mid-stream state.
 - **The transcript is append-only within a session.** It's written
   line-by-line as turns happen, so even a crash mid-response leaves
   a partial record.
