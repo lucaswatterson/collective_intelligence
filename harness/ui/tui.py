@@ -1,3 +1,4 @@
+import io
 import select
 import sys
 import termios
@@ -171,20 +172,38 @@ def _chat_body_panel(buffer: ChatBuffer) -> Panel:
     )
 
 
-def _chat_input_panel(input_state: InputState) -> Panel:
+def _input_prompt(input_state: InputState) -> Text:
     text_buffer, busy = input_state.snapshot()
     if busy:
-        prompt = Text.assemble(
+        return Text.assemble(
             ("entity › ", "bold green"),
             ("thinking…", "dim italic"),
         )
-    else:
-        prompt = Text.assemble(
-            ("you › ", "bold cyan"),
-            (text_buffer, "white"),
-            ("▎", "bold white"),
-        )
-    return Panel(prompt, border_style="green", padding=(0, 1))
+    return Text.assemble(
+        ("you › ", "bold cyan"),
+        (text_buffer, "white"),
+        ("▎", "bold white"),
+    )
+
+
+def _input_panel_height(prompt: Text, chat_width: int, max_height: int) -> int:
+    """Total panel height (incl. borders) needed to render prompt without crop."""
+    inner = max(1, chat_width - 4)  # 2 border cols + 2 padding cols
+    measure = Console(width=inner, file=io.StringIO(), force_terminal=False)
+    lines = measure.render_lines(prompt, pad=False)
+    return max(3, min(max_height, max(1, len(lines)) + 2))
+
+
+def _chat_panel_width(console: Console) -> int:
+    """Mirror Layout's split_row math for the chat column.
+
+    Root: chat ratio=2, right ratio=1 with minimum_size=28.
+    Rich satisfies minimums first, then distributes remaining width by ratio.
+    """
+    total = console.size.width
+    chat_min, right_min = 1, 28
+    remaining = max(0, total - chat_min - right_min)
+    return chat_min + (remaining * 2) // 3
 
 
 def _self_image_panel(entity: Entity) -> Panel:
@@ -324,8 +343,16 @@ def run_tui(
     )
 
     def refresh() -> None:
+        prompt = _input_prompt(input_state)
+        chat_width = _chat_panel_width(console)
+        max_input = max(3, console.size.height // 2)
+        new_size = _input_panel_height(prompt, chat_width, max_input)
+        if layout["chat_input"].size != new_size:
+            layout["chat_input"].size = new_size
         layout["chat_body"].update(_chat_body_panel(buffer))
-        layout["chat_input"].update(_chat_input_panel(input_state))
+        layout["chat_input"].update(
+            Panel(prompt, border_style="green", padding=(0, 1))
+        )
         layout["self_image"].update(_self_image_panel(entity))
         layout["tasks"].update(_tasks_panel(status, tasks_dir))
 

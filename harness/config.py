@@ -7,6 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 load_dotenv()
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+HARNESS_ROOT = Path(__file__).resolve().parent
 ENTITY_ROOT = REPO_ROOT / "entity"
 
 
@@ -23,11 +24,20 @@ class Settings(BaseSettings):
     worker_poll_interval: float = Field(10.0, alias="WORKER_POLL_INTERVAL")
 
     repo_root: Path = REPO_ROOT
+    harness_root: Path = HARNESS_ROOT
     entity_root: Path = ENTITY_ROOT
 
     @property
+    def template_dir(self) -> Path:
+        return self.harness_root / "template"
+
+    @property
     def birth_path(self) -> Path:
-        return self.repo_root / "BIRTH.md"
+        return self.harness_root / "BIRTH.md"
+
+    @property
+    def worker_log_path(self) -> Path:
+        return self.entity_root / "worker.log"
 
     @property
     def identity_path(self) -> Path:

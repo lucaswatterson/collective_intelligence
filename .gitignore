@@ -11,3 +11,6 @@ wheels/
 
 # Environment Variables
 .env
+
+# Entity runtime workspace (bootstrapped from harness/template/ on birth)
+/entity/
