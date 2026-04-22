@@ -4,6 +4,8 @@ A lightweight Python harness that hosts a persistent, self-modifying AI entity. 
 
 There is no database, no cloud, no orchestration framework. Just a process, a folder, and a model.
 
+Built on the [Anthropic SDK](https://github.com/anthropics/anthropic-sdk-python) — Claude is the only supported model provider today.
+
 ## Quickstart
 
 Requirements: Python 3.13.2 (pinned in `.python-version`), [`uv`](https://github.com/astral-sh/uv), and an Anthropic API key.
