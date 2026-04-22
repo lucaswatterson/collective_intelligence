@@ -2,11 +2,13 @@ import logging
 import threading
 import traceback
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 import frontmatter
 
 from harness.entity import Entity
+from harness.runtime.scheduler import materialize_due_schedules
 from harness.runtime.status import WorkerStatus
 
 
@@ -74,6 +76,7 @@ def run_worker(
     status: WorkerStatus,
     stop_event: threading.Event,
     tasks_dir: Path,
+    schedules_dir: Path,
     poll_interval: float = 10.0,
 ) -> None:
     """Poll tasks_dir for `status: todo` tasks and work them one at a time.
@@ -95,6 +98,15 @@ def run_worker(
         if not ready_logged:
             log.info("worker ready; polling %s every %.1fs", tasks_dir, poll_interval)
             ready_logged = True
+
+        try:
+            fired = materialize_due_schedules(
+                schedules_dir, tasks_dir, datetime.now(timezone.utc)
+            )
+            for name in fired:
+                log.info("scheduler fired: %s", name)
+        except Exception:
+            log.exception("scheduler tick failed")
 
         task = _next_todo(tasks_dir)
         if task is None:

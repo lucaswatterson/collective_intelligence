@@ -31,6 +31,7 @@ def main() -> None:
             status,
             stop_event,
             settings.tasks_dir,
+            settings.schedules_dir,
             settings.worker_poll_interval,
         ),
         daemon=True,

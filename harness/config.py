@@ -46,6 +46,10 @@ class Settings(BaseSettings):
         return self.entity_root / "tasks"
 
     @property
+    def schedules_dir(self) -> Path:
+        return self.entity_root / "schedules"
+
+    @property
     def work_dir(self) -> Path:
         return self.entity_root / "work"
 
