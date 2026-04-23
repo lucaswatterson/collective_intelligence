@@ -118,12 +118,18 @@ class Entity:
                     {"role": "assistant", "content": "Recalled. Ready."}
                 )
 
-    def turn(self, user_input: str, *, on_text: Callable[[str], None]) -> str:
+    def turn(
+        self,
+        user_input: str,
+        *,
+        on_text: Callable[[str], None],
+        on_tool_use: Callable[[str], None] | None = None,
+    ) -> str:
         assert self.transcript is not None, "Call begin_session() first."
         append_turn(self.transcript, "user", user_input)
         self.messages.append({"role": "user", "content": user_input})
 
-        final_text = self._run_tool_loop(on_text=on_text)
+        final_text = self._run_tool_loop(on_text=on_text, on_tool_use=on_tool_use)
         append_turn(self.transcript, "assistant", final_text)
         return final_text
 

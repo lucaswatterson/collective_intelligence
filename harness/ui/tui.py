@@ -101,6 +101,7 @@ class InputState:
         self._buffer = ""
         self._submitted: str | None = None
         self._busy = False
+        self._current_tool: str | None = None
 
     def key(self, ch: str) -> None:
         with self._lock:
@@ -128,10 +129,16 @@ class InputState:
     def set_busy(self, busy: bool) -> None:
         with self._lock:
             self._busy = busy
+            if not busy:
+                self._current_tool = None
 
-    def snapshot(self) -> tuple[str, bool]:
+    def set_tool(self, name: str | None) -> None:
         with self._lock:
-            return self._buffer, self._busy
+            self._current_tool = name
+
+    def snapshot(self) -> tuple[str, bool, str | None]:
+        with self._lock:
+            return self._buffer, self._busy, self._current_tool
 
 
 class _TailCropped:
@@ -173,11 +180,12 @@ def _chat_body_panel(buffer: ChatBuffer) -> Panel:
 
 
 def _input_prompt(input_state: InputState) -> Text:
-    text_buffer, busy = input_state.snapshot()
+    text_buffer, busy, current_tool = input_state.snapshot()
     if busy:
+        label = f"calling {current_tool}…" if current_tool else "thinking…"
         return Text.assemble(
             ("entity › ", "bold green"),
-            ("thinking…", "dim italic"),
+            (label, "dim italic"),
         )
     return Text.assemble(
         ("you › ", "bold cyan"),
@@ -370,8 +378,11 @@ def run_tui(
         def on_text(chunk: str) -> None:
             streaming.append(chunk)
 
+        def on_tool_use(name: str) -> None:
+            input_state.set_tool(name)
+
         try:
-            entity.turn(text, on_text=on_text)
+            entity.turn(text, on_text=on_text, on_tool_use=on_tool_use)
             buffer.commit_streaming()
         except Exception as exc:
             buffer.commit_streaming()
