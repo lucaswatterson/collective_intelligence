@@ -14,3 +14,6 @@ wheels/
 
 # Entity runtime workspace (bootstrapped from harness/template/ on birth)
 /entity/
+
+# Local integration secrets (OAuth client secrets, cached tokens)
+/harness/secrets/

@@ -289,12 +289,20 @@ daemon loop that consumes tasks.
 Before picking a task, each poll iteration calls
 `materialize_due_schedules(schedules_dir, tasks_dir, now)` from
 `harness/runtime/scheduler.py`. That function walks
-`entity/schedules/*.md`, parses the `interval` / `last_run`
-frontmatter, and for each schedule whose next fire is due — and
-which has no pending task (`todo` / `in-progress` / `blocked`)
-bearing its `schedule:` tag — writes a fresh task into
-`entity/tasks/` and updates `last_run`. Scheduler failures are
-logged but don't stop the worker.
+`entity/schedules/*.md` and for each schedule whose next fire is
+due — and which has no pending task (`todo` / `in-progress` /
+`blocked`) bearing its `schedule:` tag — writes a fresh task into
+`entity/tasks/` and updates `last_run`.
+
+Schedules declare exactly one of two modes:
+- `interval: 24h` — fires when `last_run + interval <= now`
+  (drifts based on first fire).
+- `at: "16:05"` (optional `timezone: "America/Los_Angeles"`,
+  defaults to system local) — fires once per day at that wall-clock
+  time. First run waits for the next boundary; DST transitions are
+  handled.
+
+Scheduler failures are logged but don't stop the worker.
 
 ### Picking a task
 `_next_todo(tasks_dir)` scans `entity/tasks/*.md` (skipping hidden
@@ -400,8 +408,9 @@ You own these, under `entity/`:
 - `memory/long_term/INDEX.md` — auto-generated category index.
 - `tasks/` — active work items (`status: todo|in-progress|blocked`).
 - `schedules/` — recurring job definitions. The worker-loop
-  scheduler reads these, checks `interval` vs `last_run`, and
-  materializes fresh tasks into `tasks/` when due.
+  scheduler reads these, checks `interval` vs `last_run` (or
+  `at` + `timezone` for wall-clock mode), and materializes fresh
+  tasks into `tasks/` when due.
 - `skills/` — your capabilities. `skills/.archive/` holds old
   versions.
 - `work/` — artifacts produced by tasks, organized by task slug.
