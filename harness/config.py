@@ -87,18 +87,6 @@ class Settings(BaseSettings):
     def self_image_path(self) -> Path:
         return self.entity_root / "self_image.txt"
 
-    @property
-    def gmail_secrets_dir(self) -> Path:
-        return self.harness_root / "secrets" / "gmail"
-
-    @property
-    def gmail_client_secrets_path(self) -> Path:
-        return self.gmail_secrets_dir / "client_secrets.json"
-
-    @property
-    def gmail_token_path(self) -> Path:
-        return self.gmail_secrets_dir / "token.json"
-
 
 def load_settings() -> Settings:
     return Settings()  # type: ignore[call-arg]

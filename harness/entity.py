@@ -191,12 +191,19 @@ class Entity:
         on_text: Callable[[str], None] | None = None,
         on_tool_use: Callable[[str], None] | None = None,
     ) -> str:
-        tools = [WEB_SEARCH_TOOL, WEB_FETCH_TOOL, *to_anthropic_tools(self.skills)]
-        if self.in_birth:
-            tools = [COMMIT_IDENTITY_TOOL, *tools]
+        def build_tools() -> list[dict[str, Any]]:
+            result = [
+                WEB_SEARCH_TOOL,
+                WEB_FETCH_TOOL,
+                *to_anthropic_tools(self.skills),
+            ]
+            if self.in_birth:
+                result = [COMMIT_IDENTITY_TOOL, *result]
+            return result
 
         response = None
         while True:
+            tools = build_tools()
             response = self.client.stream_turn(
                 model=Models.DEFAULT,
                 system=cached_system(self.system_text),
@@ -251,9 +258,6 @@ class Entity:
 
             if reload_skills:
                 self.skills = discover_skills(self.settings.skills_dir)
-                tools = [WEB_SEARCH_TOOL, WEB_FETCH_TOOL, *to_anthropic_tools(self.skills)]
-                if self.in_birth:
-                    tools = [COMMIT_IDENTITY_TOOL, *tools]
             if reload_identity and not self.in_birth:
                 self.system_text = self.settings.identity_path.read_text(encoding="utf-8")
 
