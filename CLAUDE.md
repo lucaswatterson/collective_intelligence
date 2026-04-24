@@ -35,6 +35,10 @@ The entity has its own system prompt (`entity/IDENTITY.md`, or `BIRTH.md` at the
 
 Everything user-facing (tasks, schedules, memories, skills) is Markdown + YAML frontmatter, parsed via `python-frontmatter`. Follow the existing frontmatter shape when adding new file types — don't invent parallel schemas.
 
+## Optional integrations
+
+- **Google Workspace Remote MCP** — opt-in. `uv run scripts/install_google_workspace.py` runs a guided OAuth flow per product (Gmail, Calendar, Drive, People) and writes refresh tokens to `harness/secrets/google/{product}.json` (gitignored). `harness/integrations/google.py:build_google_mcp_servers` mints a fresh access token per tool loop and hands the servers to the Anthropic MCP connector (`beta.messages.*`, `mcp-client-2025-11-20`). When the secrets directory is empty the integration is inert — no beta field, no extra tools, no behavior change. Uninstall via `--uninstall <product|all>` (revokes the refresh token, then deletes the file).
+
 ## Conventions
 
 - Modern Python 3.13: native generics (`list[T]`, `dict[K, V]`), no `from __future__ import annotations`.

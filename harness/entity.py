@@ -7,6 +7,7 @@ from typing import Any
 
 from harness.client import EntityClient, cached_system
 from harness.config import Models, Settings
+from harness.integrations.google import build_google_mcp_servers
 from harness.memory.store import append_turn, recent_transcripts, start_session
 from harness.skills.loader import Skill, discover_skills
 from harness.skills.registry import execute, to_anthropic_tools
@@ -191,11 +192,16 @@ class Entity:
         on_text: Callable[[str], None] | None = None,
         on_tool_use: Callable[[str], None] | None = None,
     ) -> str:
+        mcp_servers, mcp_toolsets = build_google_mcp_servers(
+            self.settings.google_secrets_dir
+        )
+
         def build_tools() -> list[dict[str, Any]]:
             result = [
                 WEB_SEARCH_TOOL,
                 WEB_FETCH_TOOL,
                 *to_anthropic_tools(self.skills),
+                *mcp_toolsets,
             ]
             if self.in_birth:
                 result = [COMMIT_IDENTITY_TOOL, *result]
@@ -209,9 +215,11 @@ class Entity:
                 system=cached_system(self.system_text),
                 messages=self.messages,
                 tools=tools or None,
+                mcp_servers=mcp_servers or None,
                 on_text=on_text,
             )
-            self.messages.append({"role": "assistant", "content": response.content})
+            persisted_content = _replace_orphan_mcp_tool_use(response.content)
+            self.messages.append({"role": "assistant", "content": persisted_content})
 
             block_types = Counter(b.type for b in response.content)
             tool_names = [b.name for b in response.content if b.type == "tool_use"]
@@ -221,6 +229,16 @@ class Entity:
                 dict(block_types),
                 tool_names,
             )
+            for b in response.content:
+                if b.type == "mcp_tool_use":
+                    log.info(
+                        "mcp_tool_use: server=%s name=%s input=%s",
+                        getattr(b, "server_name", "?"),
+                        b.name,
+                        b.input,
+                    )
+                elif b.type == "mcp_tool_result" and getattr(b, "is_error", False):
+                    log.warning("mcp_tool_result error: %s", b.content)
 
             if response.stop_reason == "pause_turn":
                 continue
@@ -267,6 +285,47 @@ class Entity:
         self.settings.identity_path.write_text(identity_text, encoding="utf-8")
         self.system_text = identity_text
         self.in_birth = False
+
+
+def _replace_orphan_mcp_tool_use(content: list[Any]) -> list[Any]:
+    """Replace orphan mcp_tool_use blocks with a visible failure note.
+
+    When a remote MCP call dies mid-stream (stop_reason=None), the response
+    can contain an mcp_tool_use with no paired mcp_tool_result. Persisting
+    that orphan poisons message history: the next API call fails with
+    `mcp_tool_use ... was found without a corresponding mcp_tool_result`.
+
+    We replace the orphan with a plain text block so the model sees the
+    failure on its next turn and can report it to the user instead of
+    silently retrying.
+    """
+    result_ids = {
+        b.tool_use_id for b in content if getattr(b, "type", None) == "mcp_tool_result"
+    }
+    filtered: list[Any] = []
+    for b in content:
+        if getattr(b, "type", None) == "mcp_tool_use" and b.id not in result_ids:
+            server = getattr(b, "server_name", "?")
+            log.warning(
+                "replacing orphan mcp_tool_use (no result returned): id=%s server=%s name=%s",
+                b.id,
+                server,
+                b.name,
+            )
+            filtered.append(
+                {
+                    "type": "text",
+                    "text": (
+                        f"[system: MCP call `{server}/{b.name}` was interrupted "
+                        f"mid-stream with no result. Assume the action did NOT "
+                        f"complete. Do not retry automatically — tell the user "
+                        f"what you tried and that it failed.]"
+                    ),
+                }
+            )
+            continue
+        filtered.append(b)
+    return filtered
 
 
 def _start_task_session(short_term_dir: Path, slug: str) -> Path:
