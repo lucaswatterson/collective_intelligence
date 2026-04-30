@@ -87,10 +87,6 @@ class Settings(BaseSettings):
     def self_image_path(self) -> Path:
         return self.entity_root / "self_image.txt"
 
-    @property
-    def google_secrets_dir(self) -> Path:
-        return self.harness_root / "secrets" / "google"
-
 
 def load_settings() -> Settings:
     return Settings()  # type: ignore[call-arg]

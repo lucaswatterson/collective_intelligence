@@ -1,4 +1,6 @@
 import io
+import logging
+import os
 import select
 import sys
 import termios
@@ -119,6 +121,12 @@ class InputState:
                 return
             else:
                 self._buffer += ch
+
+    def paste(self, text: str) -> None:
+        with self._lock:
+            if self._busy:
+                return
+            self._buffer += text
 
     def take_submission(self) -> str | None:
         with self._lock:
@@ -318,8 +326,43 @@ def _read_escape() -> str | None:
                 "6~": "page_down",
                 "H": "home",
                 "F": "end",
+                "200~": "paste_start",
+                "201~": "paste_end",
             }.get(seq)
         params += c
+
+
+def _read_paste() -> str:
+    """Read a bracketed-paste payload up to the closing ESC[201~ marker.
+
+    Called after ESC[200~ has been consumed. Returns the payload verbatim,
+    excluding the closing marker.
+    """
+    out: list[str] = []
+    # Match the 5-byte closing sequence: ESC [ 2 0 1 ~
+    end = ("\x1b", "[", "2", "0", "1", "~")
+    matched = 0
+    while True:
+        try:
+            c = sys.stdin.read(1)
+        except Exception:
+            break
+        if not c:
+            break
+        if c == end[matched]:
+            matched += 1
+            if matched == len(end):
+                break
+            continue
+        if matched:
+            # Partial match broke; flush the matched prefix into the payload.
+            out.append("".join(end[:matched]))
+            matched = 0
+            if c == end[0]:
+                matched = 1
+                continue
+        out.append(c)
+    return "".join(out)
 
 
 def run_tui(
@@ -353,13 +396,13 @@ def run_tui(
     def refresh() -> None:
         prompt = _input_prompt(input_state)
         chat_width = _chat_panel_width(console)
-        max_input = max(3, console.size.height // 2)
+        max_input = max(3, (console.size.height * 3) // 4)
         new_size = _input_panel_height(prompt, chat_width, max_input)
         if layout["chat_input"].size != new_size:
             layout["chat_input"].size = new_size
         layout["chat_body"].update(_chat_body_panel(buffer))
         layout["chat_input"].update(
-            Panel(prompt, border_style="green", padding=(0, 1))
+            Panel(_TailCropped(prompt), border_style="green", padding=(0, 1))
         )
         layout["self_image"].update(_self_image_panel(entity))
         layout["tasks"].update(_tasks_panel(status, tasks_dir))
@@ -406,8 +449,16 @@ def run_tui(
         threading.Thread(target=ticker, daemon=True).start()
 
         turn_thread: threading.Thread | None = None
+        log = logging.getLogger(__name__)
+        try:
+            tty_out_fd = os.open("/dev/tty", os.O_WRONLY)
+        except OSError:
+            tty_out_fd = -1
         try:
             tty.setcbreak(fd)
+            if tty_out_fd >= 0:
+                os.write(tty_out_fd, b"\x1b[?2004h")  # enable bracketed paste
+                log.info("tui: bracketed paste mode enabled")
             while True:
                 r, _, _ = select.select([sys.stdin], [], [], 0.05)
                 if r:
@@ -418,7 +469,11 @@ def run_tui(
                         break  # Ctrl-D on empty line
                     if ch == "\x1b":  # ESC — parse CSI sequence
                         key = _read_escape()
-                        if key == "page_up":
+                        if key == "paste_start":
+                            payload = _read_paste()
+                            log.info("tui: paste received len=%d", len(payload))
+                            input_state.paste(payload)
+                        elif key == "page_up":
                             buffer.scroll_up(10)
                         elif key == "page_down":
                             buffer.scroll_down(10)
@@ -451,6 +506,15 @@ def run_tui(
                 if stop_event.is_set():
                     break
         finally:
+            if tty_out_fd >= 0:
+                try:
+                    os.write(tty_out_fd, b"\x1b[?2004l")  # disable bracketed paste
+                except OSError:
+                    pass
+                try:
+                    os.close(tty_out_fd)
+                except OSError:
+                    pass
             termios.tcsetattr(fd, termios.TCSADRAIN, old_term)
             if turn_thread is not None and turn_thread.is_alive():
                 turn_thread.join(timeout=5)
