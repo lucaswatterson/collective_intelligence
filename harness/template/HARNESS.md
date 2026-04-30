@@ -332,10 +332,11 @@ For each task:
 4. If `work_on_task` raises, the harness writes `status: blocked` and
    appends a `*Worker note*` section with the traceback — but only if
    the file still exists (you may have archived it).
-5. If the task loop returns cleanly but the task file is still on
-   disk with `status: in-progress` (i.e. you never called
-   `complete_task` or `update_task`), the harness marks it `blocked`
-   with a note saying so. This prevents silently stuck tasks.
+5. If the task loop returns cleanly with `status: in-progress`, the
+   task is left as-is. Leaving a task `in-progress` to wait on
+   something is the documented path in `WORKER_PROMPT_PREFIX`; the
+   pre-transition in step 1 keeps the worker from re-grabbing it on
+   the next scan.
 6. `status.finish()` resets the snapshot to idle.
 7. A 500 ms wait on `stop_event` before the next scan, so a shutdown
    request is picked up promptly even if the queue is long.

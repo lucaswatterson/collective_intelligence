@@ -131,25 +131,6 @@ def run_worker(
             # completed/archived by the entity mid-run).
             if task.path.exists():
                 _set_status(task.path, "blocked", note=f"Worker exception:\n```\n{tb}\n```")
-        else:
-            # Task loop finished cleanly but the entity never called
-            # complete_task/update_task. Don't leave it silently stuck —
-            # mark blocked so it shows up on next triage.
-            if task.path.exists():
-                try:
-                    post = frontmatter.load(task.path)
-                    if (post.metadata or {}).get("status") == "in-progress":
-                        log.warning(
-                            "task %s returned from entity but was not completed or updated",
-                            task.path.name,
-                        )
-                        _set_status(
-                            task.path,
-                            "blocked",
-                            note="Entity finished its turn without calling `complete_task` or `update_task`. Check worker.log for stop_reason.",
-                        )
-                except Exception:
-                    log.exception("failed post-task status check on %s", task.path.name)
         finally:
             status.finish()
 

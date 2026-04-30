@@ -90,33 +90,11 @@ class Entity:
             self.system_text = self.settings.birth_path.read_text(encoding="utf-8")
         else:
             self.in_birth = False
-            self.system_text = self.settings.identity_path.read_text(encoding="utf-8")
+            self._load_identity()
 
         self.messages = []
         if not self.in_birth:
-            recents = recent_transcripts(self.settings.short_term_dir, limit=2)
-            current_marker = f"# Session {self.transcript.stem}"
-            recents = [r for r in recents if not r.startswith(current_marker)]
-
-            index_path = self.settings.long_term_index_path
-            index_text = index_path.read_text(encoding="utf-8") if index_path.exists() else ""
-
-            parts = []
-            if index_text.strip():
-                parts.append(
-                    "Your long-term memory index. Use `read_memory` to pull any entry in full.\n\n"
-                    + index_text
-                )
-            if recents:
-                parts.append(
-                    "Recent session transcripts (most recent last):\n\n"
-                    + "\n\n---\n\n".join(recents)
-                )
-            if parts:
-                self.messages.append({"role": "user", "content": "\n\n===\n\n".join(parts)})
-                self.messages.append(
-                    {"role": "assistant", "content": "Recalled. Ready."}
-                )
+            self.messages.extend(self._load_recall_preamble(include_recent_transcripts=True))
 
     def turn(
         self,
@@ -153,7 +131,7 @@ class Entity:
                 "Entity has not been born yet; worker cannot run until IDENTITY.md is committed."
             )
         self.in_birth = False
-        self.system_text = self.settings.identity_path.read_text(encoding="utf-8")
+        self._load_identity()
 
         raw = task_path.read_text(encoding="utf-8")
         slug = task_path.stem
@@ -161,19 +139,7 @@ class Entity:
         self.transcript = _start_task_session(self.settings.short_term_dir, slug)
 
         self.messages = []
-        index_path = self.settings.long_term_index_path
-        if index_path.exists() and index_path.read_text(encoding="utf-8").strip():
-            index_text = index_path.read_text(encoding="utf-8")
-            self.messages.append(
-                {
-                    "role": "user",
-                    "content": (
-                        "Your long-term memory index. Use `read_memory` to pull any "
-                        "entry in full.\n\n" + index_text
-                    ),
-                }
-            )
-            self.messages.append({"role": "assistant", "content": "Recalled. Ready."})
+        self.messages.extend(self._load_recall_preamble(include_recent_transcripts=False))
 
         prompt = WORKER_PROMPT_PREFIX.format(
             slug=slug, filename=task_path.name, task_body=raw
@@ -259,9 +225,41 @@ class Entity:
             if reload_skills:
                 self.skills = discover_skills(self.settings.skills_dir)
             if reload_identity and not self.in_birth:
-                self.system_text = self.settings.identity_path.read_text(encoding="utf-8")
+                self._load_identity()
 
         return "".join(b.text for b in response.content if b.type == "text")
+
+    def _load_identity(self) -> None:
+        self.system_text = self.settings.identity_path.read_text(encoding="utf-8")
+
+    def _load_recall_preamble(
+        self, *, include_recent_transcripts: bool
+    ) -> list[dict[str, Any]]:
+        """Return a [user-context, 'Recalled. Ready.'] message pair, or []."""
+        parts: list[str] = []
+        index_path = self.settings.long_term_index_path
+        index_text = index_path.read_text(encoding="utf-8") if index_path.exists() else ""
+        if index_text.strip():
+            parts.append(
+                "Your long-term memory index. Use `read_memory` to pull any entry in full.\n\n"
+                + index_text
+            )
+        if include_recent_transcripts:
+            recents = recent_transcripts(self.settings.short_term_dir, limit=2)
+            if self.transcript is not None:
+                current_marker = f"# Session {self.transcript.stem}"
+                recents = [r for r in recents if not r.startswith(current_marker)]
+            if recents:
+                parts.append(
+                    "Recent session transcripts (most recent last):\n\n"
+                    + "\n\n---\n\n".join(recents)
+                )
+        if not parts:
+            return []
+        return [
+            {"role": "user", "content": "\n\n===\n\n".join(parts)},
+            {"role": "assistant", "content": "Recalled. Ready."},
+        ]
 
     def _commit_identity(self, identity_text: str) -> None:
         self.settings.identity_path.write_text(identity_text, encoding="utf-8")
