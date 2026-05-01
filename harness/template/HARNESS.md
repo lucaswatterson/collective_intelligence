@@ -64,7 +64,7 @@ versa.
 `main.py` assembles everything:
 
 - Loads `.env` via `load_settings()` → a `Settings` object (paths, API
-  key, poll interval, model names).
+  key, poll interval, planning cooldown, model names).
 - Calls `bootstrap_entity(settings)`, which copies
   `harness/template/` into `entity/` if `entity/` doesn't exist yet.
   This is how a fresh checkout gets a seeded workspace.
@@ -73,11 +73,13 @@ versa.
   `transcript`, and `system_text` state.
 - Creates a `WorkerStatus` (thread-safe snapshot the TUI reads) and a
   `threading.Event` called `stop_event`.
-- Unconditionally starts a daemon thread running `run_worker(...)`.
-  The thread checks `needs_birth()` each tick and waits out the poll
-  interval if you're unborn, rather than being gated at startup.
-- Runs `run_tui(chat_entity, status, stop_event, settings.tasks_dir)`
-  in the main thread.
+- Unconditionally starts a daemon thread running `run_worker(worker_entity,
+  status, stop_event, tasks_dir, responsibilities_dir, worker_poll_interval,
+  planning_cooldown_minutes)`. The thread checks `needs_birth()` each
+  tick and waits out the poll interval if you're unborn, rather than
+  being gated at startup.
+- Runs `run_tui(chat_entity, status, stop_event, tasks_dir,
+  responsibilities_dir)` in the main thread.
 - On TUI exit, sets `stop_event` and joins the worker thread with a
   5-second timeout.
 
@@ -283,38 +285,61 @@ doesn't schedule it — you do, when it matters.
 ## 8. The worker loop
 
 `harness/runtime/worker.py` defines `run_worker(...)`, the
-daemon loop that consumes tasks.
-
-### Scheduler tick
-Before picking a task, each poll iteration calls
-`materialize_due_schedules(schedules_dir, tasks_dir, now)` from
-`harness/runtime/scheduler.py`. That function walks
-`entity/schedules/*.md` and for each schedule whose next fire is
-due — and which has no pending task (`todo` / `in-progress` /
-`blocked`) bearing its `schedule:` tag — writes a fresh task into
-`entity/tasks/` and updates `last_run`.
-
-Schedules declare exactly one of two modes:
-- `interval: 24h` — fires when `last_run + interval <= now`
-  (drifts based on first fire).
-- `at: "16:05"` (optional `timezone: "America/Los_Angeles"`,
-  defaults to system local) — fires once per day at that wall-clock
-  time. First run waits for the next boundary; DST transitions are
-  handled.
-
-Scheduler failures are logged but don't stop the worker.
+daemon loop that consumes tasks. There is no built-in cron and no
+`schedules/` directory: recurring work is modelled as
+**responsibilities** plus an **idle-time planning tick** (see below).
 
 ### Picking a task
 `_next_todo(tasks_dir)` scans `entity/tasks/*.md` (skipping hidden
-files), loads frontmatter, filters to `status: todo`, and sorts by:
+files), loads frontmatter, filters to `status: todo`, and sorts by
+`PRIORITY_ORDER`:
 
 1. Priority — `high` (0), `medium` (1), `low` (2). Missing or
    unknown → `medium`.
 2. `created` timestamp ascending — older first.
 3. Filename — as a stable tiebreak.
 
-The first candidate wins. If none are ready, the loop waits
-`worker_poll_interval` seconds (default 10) and scans again.
+The first candidate wins. If none are ready, the loop runs the
+planning-tick check (next subsection) and then waits
+`worker_poll_interval` seconds (default 10, env
+`WORKER_POLL_INTERVAL`) before scanning again.
+
+### Idle behaviour: the planning tick
+When `_next_todo` returns nothing, the worker considers enqueueing a
+synthetic "Review responsibilities" task so the queue doesn't sit
+empty when there are standing commitments to attend to. The tick has
+three gates and runs in this order:
+
+1. **Cooldown.** At least `planning_cooldown_minutes` must have passed
+   since the last tick attempt (env
+   `RESPONSIBILITIES_COOLDOWN_MINUTES`, default 1.0). This is a floor
+   on tick frequency, not a schedule — per-responsibility cadence is
+   what actually decides what's worth waking up for.
+2. **Dedup.** `_planning_task_pending(tasks_dir)` walks the queue and
+   returns true if any task tagged `planning-tick` is already
+   `todo` or `in-progress`. If so, skip — don't stack ticks.
+3. **Due-ness.** `active_responsibilities(responsibilities_dir)`
+   reads `entity/responsibilities/*.md`, keeps those with
+   `enabled: true` (default true), and sorts by `last_reviewed`
+   ascending so neglected ones surface first.
+   `_due_responsibilities(...)` then filters to entries whose
+   `review_interval` (e.g. `30m`, `4h`, `1d`, `1w`) has elapsed since
+   `last_reviewed`. Entries with no `review_interval` are always due.
+
+If at least one responsibility is due, `_enqueue_planning_task(...)`
+writes `entity/tasks/<timestamp>_review_responsibilities.md` with
+frontmatter `{title: "Review responsibilities", status: todo,
+priority: low, tags: [planning-tick], author: harness}` and a body
+listing the due entries. The cooldown timestamp is updated either way
+— even when nothing was due — so the worker doesn't re-scan
+responsibilities every poll.
+
+The body of the planning task instructs you (the entity) to: read each
+listed responsibility, decide whether it wants follow-up work, call
+`create_task` for the ones that do, call `update_responsibility` on
+each one you reviewed (so `last_reviewed` advances), then
+`complete_task`. The planning tick is a *plan*, not the work itself —
+real work goes into separate tasks the worker picks up next.
 
 ### Running a task
 For each task:
@@ -359,7 +384,10 @@ above an `Input` widget. The right column splits vertically into a
 **responsibilities panel** (active entries from
 `entity/responsibilities/` with relative `last_reviewed` timestamps,
 oldest first) and a **tasks panel** (current worker snapshot plus
-up to five queued tasks).
+up to five queued tasks). The responsibilities panel calls the same
+`active_responsibilities(...)` helper the worker uses for its planning
+tick, so the TUI shows the same view of your commitments the
+background loop is reasoning over.
 
 ### Threads
 - **UI thread** — Textual's event loop drives all widget updates.
@@ -398,30 +426,51 @@ in real time.
 ## 10. The filesystem contract
 
 Every path is a property on `Settings` (`harness/config.py`).
-You own these, under `entity/`:
+You own these, under `entity/`, grouped by purpose:
 
+**Identity**
 - `IDENTITY.md` — your system prompt once born. See `BIRTH.md` for
   philosophy.
+- `IDENTITY_HISTORY.md` — optional. If a skill chooses to preserve
+  prior identity edits it writes them here; the harness itself never
+  writes this file.
+
+**Inputs you read**
 - `knowledge/` — human-curated ground truth.
+- `images/` — image assets (avatars, references, anything visual).
+
+**Memory**
 - `memory/short_term/` — transcripts, one per session.
 - `memory/short_term_archive/` — transcripts you've consolidated and
   chosen to archive.
 - `memory/long_term/` — consolidated memories.
 - `memory/long_term/INDEX.md` — auto-generated category index.
+
+**Work surfaces**
 - `tasks/` — active work items (`status: todo|in-progress|blocked`).
-- `schedules/` — recurring job definitions. The worker-loop
-  scheduler reads these, checks `interval` vs `last_run` (or
-  `at` + `timezone` for wall-clock mode), and materializes fresh
-  tasks into `tasks/` when due.
-- `skills/` — your capabilities. `skills/.archive/` holds old
-  versions.
-- `work/` — artifacts produced by tasks, organized by task slug.
+- `responsibilities/` — standing commitments with optional
+  `review_interval`. Drives the worker's planning tick when the queue
+  is idle; surfaced in the TUI's responsibilities panel.
+- `notes/` — ideas captured before they're ready to become tasks.
+- `work/` — artifacts produced by autonomous task runs, organized by
+  task slug.
 - `files/` — general storage.
+
+**Public face**
+- `public/` — static-website surface (eventually GitHub Pages). Not
+  wired up yet; reserve the directory.
+
+**Skills**
+- `skills/` — your capabilities, one folder per skill.
+  `skills/.archive/` holds prior versions of skills that have been
+  deleted or replaced.
+
+**Operational**
 - `worker.log` — the worker thread's log output.
 
-You may also see `IDENTITY_HISTORY.md` at the entity root if a skill
-has been written to preserve identity edits; the config exposes its
-path but the harness itself doesn't write it — that's a skill's job.
+There is no `schedules/` directory and no built-in cron — recurring
+work lives in `responsibilities/` and is woken up by the worker's
+planning tick (see §8).
 
 Note the `harness/template/` directory: it's the seed copied into
 `entity/` by `bootstrap_entity` on first boot. Editing the template
@@ -441,11 +490,13 @@ first prompt:
 4. Two `Entity(settings)` instances are constructed — each builds its
    own `EntityClient` (Anthropic SDK handle) but holds no state yet.
 5. `WorkerStatus()` and `threading.Event()` are created.
-6. A daemon thread runs `run_worker(...)` unconditionally. Inside the
-   worker, `needs_birth()` is checked each tick; if unborn, it idles
-   and waits rather than scanning tasks.
-7. `run_tui(chat_entity, status, stop_event, settings.tasks_dir)`
-   takes the main thread.
+6. A daemon thread runs `run_worker(worker_entity, status, stop_event,
+   tasks_dir, responsibilities_dir, worker_poll_interval,
+   planning_cooldown_minutes)` unconditionally. Inside the worker,
+   `needs_birth()` is checked each tick; if unborn, it idles and
+   waits rather than scanning tasks.
+7. `run_tui(chat_entity, status, stop_event, tasks_dir,
+   responsibilities_dir)` takes the main thread.
 8. Inside the TUI, `entity.begin_session()` loads skills, starts a
    transcript, and primes messages with the memory index + recent
    transcripts (or sets up the birth prompt).
@@ -470,7 +521,13 @@ first prompt:
   system prompt mid-loop in chat sessions.
 - **The worker never runs before birth.** The thread is alive, but
   it sits in an idle-poll loop until `IDENTITY.md` exists — no
-  scheduler tick, no task pickup.
+  planning tick, no task pickup.
+- **There is no cron.** Recurring work lives in `responsibilities/`,
+  surfaced via the planning tick when the queue is idle and a
+  responsibility's `review_interval` has elapsed since `last_reviewed`.
+  If you want something to happen on a wall-clock schedule, that is
+  a responsibility plus your own discipline — the harness gives you
+  no built-in `at`/`cron` primitive.
 - **Tool errors don't crash you.** `registry.execute` catches skill
   exceptions and returns them as `"Error executing skill '<name>': ..."`
   strings in the tool result — you see the failure and can adjust.
