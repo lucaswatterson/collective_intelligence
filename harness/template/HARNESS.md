@@ -245,7 +245,7 @@ turn.
 Two layers, both plain markdown on disk.
 
 ### Short-term
-`harness/memory/store.py` owns session transcripts.
+`harness/memory/short_term.py` owns session transcripts.
 
 - `start_session(short_term_dir)` creates
   `entity/memory/short_term/YYYY-MM-DDTHH-MM-SS.md` with a header and

@@ -7,7 +7,7 @@ from typing import Any
 
 from harness.client import EntityClient, cached_system
 from harness.config import Models, Settings
-from harness.memory.store import append_turn, recent_transcripts, start_session
+from harness.memory.short_term import append_turn, recent_transcripts, start_session
 from harness.skills.loader import Skill, discover_skills
 from harness.skills.registry import execute, to_anthropic_tools
 
