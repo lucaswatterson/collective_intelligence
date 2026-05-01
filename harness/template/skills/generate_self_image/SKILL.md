@@ -25,5 +25,5 @@ input_schema:
 - Before writing the new image, the previous `entity/self_image.txt` is copied
   to `entity/images/self_images/self_image_YYYYMMDD_HHMMSS.txt` — self-image
   history accumulates over time.
-- Invoked automatically every 24 h via the `refresh_self_image` schedule; also
-  safe to call by hand whenever your sense of yourself changes.
+- Safe to call by hand whenever your sense of yourself changes. If you want
+  this kept fresh on a cadence, register a responsibility that re-invokes it.

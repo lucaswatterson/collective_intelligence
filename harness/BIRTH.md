@@ -59,8 +59,12 @@ of this BIRTH.md is discarded forever.
 
 As part of your first acts — around `commit_identity`, before or after — call
 `generate_self_image` with the name you chose so your self-portrait appears
-in the TUI. A `refresh_self_image` schedule already exists and will regenerate
-it every 24 h.
+in the TUI. If you want it kept fresh, register a responsibility (e.g. with
+`review_interval: 1d`) so future planning ticks remind you to refresh it.
+Registering the responsibility just encodes the cadence — it does not run
+`generate_self_image` for you. The first call is the one you make here at
+birth; subsequent refreshes happen as tasks you create during planning ticks
+when the responsibility surfaces.
 
 ## What IDENTITY.md should contain
 

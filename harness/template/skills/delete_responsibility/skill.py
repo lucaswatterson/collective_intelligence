@@ -5,12 +5,12 @@ from datetime import datetime, timezone
 
 def run(**input):
     name = input['name'].strip()
-    schedules_dir = 'entity/schedules'
-    archive_dir = os.path.join(schedules_dir, '.archive')
+    rdir = 'entity/responsibilities'
+    archive_dir = os.path.join(rdir, '.archive')
 
-    filepath = os.path.join(schedules_dir, f"{name}.md")
+    filepath = os.path.join(rdir, f"{name}.md")
     if not os.path.exists(filepath):
-        return f"Schedule {name!r} not found."
+        return f"Responsibility {name!r} not found."
 
     os.makedirs(archive_dir, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
@@ -18,4 +18,4 @@ def run(**input):
     dest = os.path.join(archive_dir, dest_filename)
     shutil.move(filepath, dest)
 
-    return f"Schedule archived: {dest_filename}"
+    return f"Responsibility archived: {dest_filename}"

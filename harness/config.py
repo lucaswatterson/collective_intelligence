@@ -22,6 +22,10 @@ class Settings(BaseSettings):
 
     anthropic_api_key: str = Field(..., alias="ANTHROPIC_API_KEY")
     worker_poll_interval: float = Field(10.0, alias="WORKER_POLL_INTERVAL")
+    # Floor on how often the worker enqueues a planning tick when the queue is
+    # idle. Per-responsibility `review_interval` does the actual cadence work;
+    # this just bounds wake-up frequency.
+    planning_cooldown_minutes: float = Field(1.0, alias="RESPONSIBILITIES_COOLDOWN_MINUTES")
 
     repo_root: Path = REPO_ROOT
     harness_root: Path = HARNESS_ROOT
@@ -56,8 +60,8 @@ class Settings(BaseSettings):
         return self.entity_root / "tasks"
 
     @property
-    def schedules_dir(self) -> Path:
-        return self.entity_root / "schedules"
+    def responsibilities_dir(self) -> Path:
+        return self.entity_root / "responsibilities"
 
     @property
     def work_dir(self) -> Path:
