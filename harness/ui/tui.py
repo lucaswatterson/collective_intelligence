@@ -1,239 +1,28 @@
-import io
-import logging
-import os
-import select
-import sys
-import termios
 import threading
-import time
-import tty
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import frontmatter
-from rich.console import Console, ConsoleOptions, Group, RenderResult
-from rich.layout import Layout
-from rich.live import Live
-from rich.panel import Panel
-from rich.segment import Segment
+from rich.console import Group
 from rich.text import Text
+from textual import work
+from textual.app import App, ComposeResult
+from textual.binding import Binding
+from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.message import Message
+from textual.widgets import Static, TextArea
 
 from harness.entity import Entity
 from harness.runtime.status import WorkerStatus
+from harness.runtime.worker import active_responsibilities
 
 
-BANNER_BORN = "entity online · type and press enter · Ctrl-C to quit · tasks running"
 BANNER_BIRTH = (
-    "entity unborn · begin the birth conversation\n"
+    "entity unborn · begin the birth conversation · "
     "tasks dormant until IDENTITY.md is committed"
 )
 
-
-class ChatBuffer:
-    """Thread-safe rolling buffer of rendered chat entries."""
-
-    def __init__(self, max_entries: int = 200) -> None:
-        self._lock = threading.Lock()
-        self._entries: list[Text] = []
-        self._streaming: Text | None = None
-        self._max = max_entries
-        self._scroll_offset = 0  # lines hidden from the bottom of the view
-
-    def append(self, text: Text) -> None:
-        with self._lock:
-            self._entries.append(text)
-            if len(self._entries) > self._max:
-                self._entries = self._entries[-self._max :]
-
-    def set_streaming(self, text: Text) -> None:
-        with self._lock:
-            self._streaming = text
-
-    def commit_streaming(self) -> None:
-        with self._lock:
-            if self._streaming is not None:
-                self._entries.append(self._streaming)
-                self._streaming = None
-                if len(self._entries) > self._max:
-                    self._entries = self._entries[-self._max :]
-
-    def render(self) -> Group:
-        with self._lock:
-            entries = list(self._entries)
-            streaming = self._streaming
-        items: list[Text] = []
-        for i, e in enumerate(entries):
-            if i:
-                items.append(Text(""))
-            items.append(e)
-        if streaming is not None:
-            if items:
-                items.append(Text(""))
-            items.append(streaming)
-        if not items:
-            items.append(Text(""))
-        return Group(*items)
-
-    def scroll_up(self, n: int) -> None:
-        with self._lock:
-            self._scroll_offset += n
-
-    def scroll_down(self, n: int) -> None:
-        with self._lock:
-            self._scroll_offset = max(0, self._scroll_offset - n)
-
-    def scroll_to_top(self) -> None:
-        with self._lock:
-            self._scroll_offset = 10**9  # clamped at render time
-
-    def reset_scroll(self) -> None:
-        with self._lock:
-            self._scroll_offset = 0
-
-    def scroll_offset(self) -> int:
-        with self._lock:
-            return self._scroll_offset
-
-
-class InputState:
-    """Keystroke-driven single-line input buffer with submission handoff."""
-
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._buffer = ""
-        self._submitted: str | None = None
-        self._busy = False
-        self._current_tool: str | None = None
-
-    def key(self, ch: str) -> None:
-        with self._lock:
-            if self._busy:
-                return
-            if ch in ("\r", "\n"):
-                if self._buffer.strip():
-                    self._submitted = self._buffer
-                    self._buffer = ""
-            elif ch in ("\x7f", "\x08"):  # backspace / ctrl-h
-                self._buffer = self._buffer[:-1]
-            elif ch == "\x15":  # ctrl-u — clear line
-                self._buffer = ""
-            elif ch < " ":  # ignore other control chars
-                return
-            else:
-                self._buffer += ch
-
-    def paste(self, text: str) -> None:
-        with self._lock:
-            if self._busy:
-                return
-            self._buffer += text
-
-    def take_submission(self) -> str | None:
-        with self._lock:
-            s = self._submitted
-            self._submitted = None
-            return s
-
-    def set_busy(self, busy: bool) -> None:
-        with self._lock:
-            self._busy = busy
-            if not busy:
-                self._current_tool = None
-
-    def set_tool(self, name: str | None) -> None:
-        with self._lock:
-            self._current_tool = name
-
-    def snapshot(self) -> tuple[str, bool, str | None]:
-        with self._lock:
-            return self._buffer, self._busy, self._current_tool
-
-
-class _TailCropped:
-    """Renderable that crops its content from the TOP so the newest lines
-    stay visible, with optional scrollback offset for reading older content."""
-
-    def __init__(self, renderable: Group, scroll_offset: int = 0) -> None:
-        self._renderable = renderable
-        self._scroll_offset = scroll_offset
-
-    def __rich_console__(
-        self, console: Console, options: ConsoleOptions
-    ) -> RenderResult:
-        height = options.height if options.height is not None else options.max_height
-        # Render against an uncapped height so long content isn't bottom-cropped
-        # before we get a chance to slice it ourselves.
-        render_options = options.update(height=None)
-        lines = console.render_lines(self._renderable, render_options, pad=False)
-        if height is not None and len(lines) > height:
-            max_offset = len(lines) - height
-            offset = min(self._scroll_offset, max_offset)
-            end = len(lines) - offset
-            start = end - height
-            lines = lines[start:end]
-        for line in lines:
-            yield from line
-            yield Segment.line()
-
-
-def _chat_body_panel(buffer: ChatBuffer) -> Panel:
-    offset = buffer.scroll_offset()
-    title = "chat" if offset == 0 else f"chat · scrolled (End to catch up)"
-    return Panel(
-        _TailCropped(buffer.render(), scroll_offset=offset),
-        title=title,
-        border_style="green" if offset == 0 else "yellow",
-        padding=(0, 1),
-    )
-
-
-def _input_prompt(input_state: InputState) -> Text:
-    text_buffer, busy, current_tool = input_state.snapshot()
-    if busy:
-        label = f"calling {current_tool}…" if current_tool else "thinking…"
-        return Text.assemble(
-            ("entity › ", "bold green"),
-            (label, "dim italic"),
-        )
-    return Text.assemble(
-        ("you › ", "bold cyan"),
-        (text_buffer, "white"),
-        ("▎", "bold white"),
-    )
-
-
-def _input_panel_height(prompt: Text, chat_width: int, max_height: int) -> int:
-    """Total panel height (incl. borders) needed to render prompt without crop."""
-    inner = max(1, chat_width - 4)  # 2 border cols + 2 padding cols
-    measure = Console(width=inner, file=io.StringIO(), force_terminal=False)
-    lines = measure.render_lines(prompt, pad=False)
-    return max(3, min(max_height, max(1, len(lines)) + 2))
-
-
-def _chat_panel_width(console: Console) -> int:
-    """Mirror Layout's split_row math for the chat column.
-
-    Root: chat ratio=2, right ratio=1 with minimum_size=28.
-    Rich satisfies minimums first, then distributes remaining width by ratio.
-    """
-    total = console.size.width
-    chat_min, right_min = 1, 28
-    remaining = max(0, total - chat_min - right_min)
-    return chat_min + (remaining * 2) // 3
-
-
-def _self_image_panel(entity: Entity) -> Panel:
-    path = entity.settings.self_image_path
-    if path.exists() and path.read_text(encoding="utf-8").strip():
-        body: Text = Text(path.read_text(encoding="utf-8").rstrip("\n"), style="cyan")
-    else:
-        body = Text(
-            "(no self-image yet)\n\n"
-            "write ASCII art to\nentity/self_image.txt\nand it appears here",
-            style="dim italic",
-        )
-    return Panel(body, border_style="magenta", padding=(0, 1))
-
+_MAX_ENTRIES = 200
 
 _PRIORITY_ORDER = {"high": 0, "medium": 1, "low": 2}
 _PRIORITY_LABEL: dict[str, tuple[str, str]] = {
@@ -244,7 +33,7 @@ _PRIORITY_LABEL: dict[str, tuple[str, str]] = {
 
 
 def _pending_tasks(tasks_dir: Path) -> list[dict]:
-    tasks = []
+    tasks: list[dict] = []
     if not tasks_dir.exists():
         return tasks
     for path in sorted(tasks_dir.glob("*.md")):
@@ -265,12 +54,48 @@ def _pending_tasks(tasks_dir: Path) -> list[dict]:
     return tasks
 
 
-def _tasks_panel(status: WorkerStatus, tasks_dir: Path) -> Panel:
+def _format_relative(iso_string: str | None) -> str:
+    if not iso_string:
+        return "never"
+    try:
+        dt = datetime.fromisoformat(iso_string.replace("Z", "+00:00"))
+    except ValueError:
+        return iso_string
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    secs = int((datetime.now(timezone.utc) - dt).total_seconds())
+    if secs < 60:
+        return f"{max(secs, 0)}s ago"
+    mins = secs // 60
+    if mins < 60:
+        return f"{mins}m ago"
+    hrs = mins // 60
+    if hrs < 24:
+        return f"{hrs}h ago"
+    days = hrs // 24
+    if days < 7:
+        return f"{days}d ago"
+    return f"{days // 7}w ago"
+
+
+def _render_responsibilities(resp_dir: Path) -> Group:
+    items = active_responsibilities(resp_dir)
+    if not items:
+        return Group(Text("(no active responsibilities)", style="dim italic"))
+    lines: list[Text] = []
+    for r in items:
+        rel = _format_relative(r.last_reviewed)
+        rel_style = "yellow" if r.last_reviewed is None else "dim"
+        lines.append(
+            Text.assemble((r.name, "cyan"), ("  ·  ", "dim"), (rel, rel_style))
+        )
+    return Group(*lines)
+
+
+def _render_tasks(status: WorkerStatus, tasks_dir: Path) -> Group:
     snap = status.snapshot()
     pending = _pending_tasks(tasks_dir)
-
     lines: list[Text] = []
-
     if snap.idle:
         lines.append(Text("💤 idle\nwatching for tasks", style="dim"))
     else:
@@ -295,74 +120,210 @@ def _tasks_panel(status: WorkerStatus, tasks_dir: Path) -> Panel:
         if len(pending) > 5:
             lines.append(Text(f"  … {len(pending) - 5} more", style="dim"))
 
-    border = "grey50" if snap.idle else "cyan"
-    return Panel(Group(*lines), title="tasks", border_style=border, padding=(1, 1))
+    return Group(*lines)
 
 
-def _read_escape() -> str | None:
-    """Read the rest of an ANSI escape sequence after ESC has been consumed.
+class ChatInput(TextArea):
+    """Multi-line input. Enter submits; Shift+Enter inserts a newline.
 
-    Returns a symbolic key name ("up", "down", "page_up", "page_down",
-    "home", "end") for recognized sequences, or None for anything else
-    (which is swallowed so it doesn't leak into the input buffer).
+    Falls back gracefully on terminals that can't distinguish Shift+Enter
+    from Enter — there, both will submit. Use Alt+Enter as an alternate
+    newline binding for those terminals.
+
+    Standard editing shortcuts inherited from TextArea: Ctrl+C copy,
+    Ctrl+X cut, Ctrl+V paste, Ctrl+Z/Y undo/redo. Ctrl+A is rebound to
+    select-all here (TextArea's default is emacs-style start-of-line).
     """
-    try:
-        nxt = sys.stdin.read(1)
-    except Exception:
-        return None
-    if nxt != "[":
-        return None
-    params = ""
-    while True:
-        c = sys.stdin.read(1)
-        if not c:
-            return None
-        if "\x40" <= c <= "\x7e":
-            seq = params + c
-            return {
-                "A": "up",
-                "B": "down",
-                "5~": "page_up",
-                "6~": "page_down",
-                "H": "home",
-                "F": "end",
-                "200~": "paste_start",
-                "201~": "paste_end",
-            }.get(seq)
-        params += c
+
+    BINDINGS = [
+        Binding("enter", "submit", "Submit", show=False, priority=True),
+        Binding("shift+enter", "newline", "Newline", show=False),
+        Binding("alt+enter", "newline", "Newline", show=False),
+        Binding("ctrl+a", "select_all", "Select all", show=False, priority=True),
+    ]
+
+    class Submitted(Message):
+        def __init__(self, value: str) -> None:
+            self.value = value
+            super().__init__()
+
+    def action_submit(self) -> None:
+        self.post_message(self.Submitted(self.text))
+
+    def action_newline(self) -> None:
+        self.insert("\n")
 
 
-def _read_paste() -> str:
-    """Read a bracketed-paste payload up to the closing ESC[201~ marker.
-
-    Called after ESC[200~ has been consumed. Returns the payload verbatim,
-    excluding the closing marker.
+class EntityTUI(App):
+    CSS = """
+    #left {
+        width: 2fr;
+        height: 100%;
+    }
+    #right {
+        width: 1fr;
+        min-width: 32;
+        max-width: 48;
+        height: 100%;
+    }
+    #chat-scroll {
+        height: 1fr;
+        border: round green;
+        padding: 0 1;
+    }
+    #chat { height: auto; }
+    #input {
+        height: auto;
+        min-height: 6;
+        max-height: 16;
+        border: round green;
+    }
+    #resp {
+        height: 1fr;
+        border: round magenta;
+        padding: 0 1;
+    }
+    #tasks {
+        height: 1fr;
+        border: round gray;
+        padding: 0 1;
+    }
     """
-    out: list[str] = []
-    # Match the 5-byte closing sequence: ESC [ 2 0 1 ~
-    end = ("\x1b", "[", "2", "0", "1", "~")
-    matched = 0
-    while True:
+
+    BINDINGS = [
+        Binding("ctrl+q", "quit", "Quit", priority=True),
+    ]
+
+    def __init__(
+        self,
+        entity: Entity,
+        status: WorkerStatus,
+        stop_event: threading.Event,
+        tasks_dir: Path,
+        responsibilities_dir: Path,
+    ) -> None:
+        super().__init__()
+        self.entity = entity
+        self.status = status
+        self.stop_event = stop_event
+        self.tasks_dir = tasks_dir
+        self.responsibilities_dir = responsibilities_dir
+        self._entries: list[Text] = []
+        self._streaming: Text | None = None
+        self._busy = False
+
+    def compose(self) -> ComposeResult:
+        with Horizontal():
+            with Vertical(id="left"):
+                with VerticalScroll(id="chat-scroll"):
+                    yield Static("", id="chat")
+                yield ChatInput(id="input", show_line_numbers=False)
+            with Vertical(id="right"):
+                yield Static("", id="resp")
+                yield Static("", id="tasks")
+
+    def on_mount(self) -> None:
+        self.entity.begin_session()
+        self.query_one("#chat-scroll", VerticalScroll).border_title = "entity"
+        self.query_one("#resp", Static).border_title = "responsibilities"
+        self.query_one("#tasks", Static).border_title = "tasks"
+        self.query_one("#input", ChatInput).border_title = "you"
+        if self.entity.in_birth:
+            self._append_entry(Text(BANNER_BIRTH, style="dim italic"))
+        self._refresh_panels()
+        self.set_interval(1.0, self._refresh_panels)
+        self.query_one("#input", ChatInput).focus()
+
+    def on_unmount(self) -> None:
+        self.stop_event.set()
+
+    def _refresh_panels(self) -> None:
+        self.query_one("#resp", Static).update(
+            _render_responsibilities(self.responsibilities_dir)
+        )
+        self.query_one("#tasks", Static).update(
+            _render_tasks(self.status, self.tasks_dir)
+        )
+
+    def _append_entry(self, text: Text) -> None:
+        self._entries.append(text)
+        if len(self._entries) > _MAX_ENTRIES:
+            self._entries = self._entries[-_MAX_ENTRIES:]
+        self._render_chat()
+
+    def _render_chat(self) -> None:
+        items: list[Text] = []
+        for i, e in enumerate(self._entries):
+            if i:
+                items.append(Text(""))
+            items.append(e)
+        if self._streaming is not None:
+            if items:
+                items.append(Text(""))
+            items.append(self._streaming)
+        if not items:
+            items.append(Text(""))
+        self.query_one("#chat", Static).update(Group(*items))
+        self.call_after_refresh(self._scroll_chat_end)
+
+    def _scroll_chat_end(self) -> None:
+        self.query_one("#chat-scroll", VerticalScroll).scroll_end(animate=False)
+
+    def on_chat_input_submitted(self, event: "ChatInput.Submitted") -> None:
+        text = event.value.strip()
+        if not text:
+            return
+        if text.lower() in {"exit", "quit"}:
+            self.exit()
+            return
+        if self._busy:
+            return
+        self.query_one("#input", ChatInput).text = ""
+        self._append_entry(Text.assemble(("you › ", "bold cyan"), (text, "white")))
+        self._begin_stream()
+        self.run_turn(text)
+
+    def _begin_stream(self) -> None:
+        self._busy = True
+        self._streaming = Text.assemble(("entity › ", "bold green"), ("", "white"))
+        self._render_chat()
+        self.query_one("#input", ChatInput).border_title = "thinking…"
+
+    def _append_stream_chunk(self, chunk: str) -> None:
+        if self._streaming is None:
+            return
+        self._streaming.append(chunk, "white")
+        self._render_chat()
+
+    def _set_tool(self, name: str) -> None:
+        self.query_one("#input", ChatInput).border_title = f"calling {name}…"
+
+    def _finish_stream(self, error: str | None = None) -> None:
+        if self._streaming is not None:
+            self._entries.append(self._streaming)
+            self._streaming = None
+            if len(self._entries) > _MAX_ENTRIES:
+                self._entries = self._entries[-_MAX_ENTRIES:]
+        if error:
+            self._entries.append(Text(f"[chat error: {error}]", style="red"))
+        self._render_chat()
+        self.query_one("#input", ChatInput).border_title = "you"
+        self._busy = False
+
+    @work(thread=True, exclusive=True)
+    def run_turn(self, text: str) -> None:
+        def on_text(chunk: str) -> None:
+            self.call_from_thread(self._append_stream_chunk, chunk)
+
+        def on_tool_use(name: str) -> None:
+            self.call_from_thread(self._set_tool, name)
+
         try:
-            c = sys.stdin.read(1)
-        except Exception:
-            break
-        if not c:
-            break
-        if c == end[matched]:
-            matched += 1
-            if matched == len(end):
-                break
-            continue
-        if matched:
-            # Partial match broke; flush the matched prefix into the payload.
-            out.append("".join(end[:matched]))
-            matched = 0
-            if c == end[0]:
-                matched = 1
-                continue
-        out.append(c)
-    return "".join(out)
+            self.entity.turn(text, on_text=on_text, on_tool_use=on_tool_use)
+            self.call_from_thread(self._finish_stream)
+        except Exception as exc:
+            err = str(exc)
+            self.call_from_thread(self._finish_stream, err)
 
 
 def run_tui(
@@ -370,153 +331,7 @@ def run_tui(
     status: WorkerStatus,
     stop_event: threading.Event,
     tasks_dir: Path,
+    responsibilities_dir: Path,
 ) -> None:
-    console = Console()
-    entity.begin_session()
-
-    buffer = ChatBuffer()
-    input_state = InputState()
-    banner = BANNER_BIRTH if entity.in_birth else BANNER_BORN
-    buffer.append(Text(banner, style="dim italic"))
-
-    layout = Layout()
-    layout.split_row(
-        Layout(name="chat", ratio=2),
-        Layout(name="right", ratio=1, minimum_size=28),
-    )
-    layout["chat"].split_column(
-        Layout(name="chat_body", ratio=1),
-        Layout(name="chat_input", size=3),
-    )
-    layout["right"].split_column(
-        Layout(name="self_image", ratio=1),
-        Layout(name="tasks", ratio=1),
-    )
-
-    def refresh() -> None:
-        prompt = _input_prompt(input_state)
-        chat_width = _chat_panel_width(console)
-        max_input = max(3, (console.size.height * 3) // 4)
-        new_size = _input_panel_height(prompt, chat_width, max_input)
-        if layout["chat_input"].size != new_size:
-            layout["chat_input"].size = new_size
-        layout["chat_body"].update(_chat_body_panel(buffer))
-        layout["chat_input"].update(
-            Panel(_TailCropped(prompt), border_style="green", padding=(0, 1))
-        )
-        layout["self_image"].update(_self_image_panel(entity))
-        layout["tasks"].update(_tasks_panel(status, tasks_dir))
-
-    refresh()
-
-    live_stop = threading.Event()
-
-    def run_turn(text: str) -> None:
-        buffer.reset_scroll()
-        buffer.append(Text.assemble(("you › ", "bold cyan"), (text, "white")))
-        streaming = Text.assemble(("entity › ", "bold green"), ("", "white"))
-        buffer.set_streaming(streaming)
-        input_state.set_busy(True)
-
-        def on_text(chunk: str) -> None:
-            streaming.append(chunk)
-
-        def on_tool_use(name: str) -> None:
-            input_state.set_tool(name)
-
-        try:
-            entity.turn(text, on_text=on_text, on_tool_use=on_tool_use)
-            buffer.commit_streaming()
-        except Exception as exc:
-            buffer.commit_streaming()
-            buffer.append(Text(f"[chat error: {exc}]", style="red"))
-        finally:
-            input_state.set_busy(False)
-
-    fd = sys.stdin.fileno()
-    old_term = termios.tcgetattr(fd)
-
-    with Live(
-        layout,
-        console=console,
-        refresh_per_second=10,
-        screen=True,
-    ):
-        def ticker() -> None:
-            while not live_stop.wait(0.1):
-                refresh()
-
-        threading.Thread(target=ticker, daemon=True).start()
-
-        turn_thread: threading.Thread | None = None
-        log = logging.getLogger(__name__)
-        try:
-            tty_out_fd = os.open("/dev/tty", os.O_WRONLY)
-        except OSError:
-            tty_out_fd = -1
-        try:
-            tty.setcbreak(fd)
-            if tty_out_fd >= 0:
-                os.write(tty_out_fd, b"\x1b[?2004h")  # enable bracketed paste
-                log.info("tui: bracketed paste mode enabled")
-            while True:
-                r, _, _ = select.select([sys.stdin], [], [], 0.05)
-                if r:
-                    ch = sys.stdin.read(1)
-                    if ch == "\x03":  # Ctrl-C
-                        break
-                    if ch == "\x04" and not input_state.snapshot()[0]:
-                        break  # Ctrl-D on empty line
-                    if ch == "\x1b":  # ESC — parse CSI sequence
-                        key = _read_escape()
-                        if key == "paste_start":
-                            payload = _read_paste()
-                            log.info("tui: paste received len=%d", len(payload))
-                            input_state.paste(payload)
-                        elif key == "page_up":
-                            buffer.scroll_up(10)
-                        elif key == "page_down":
-                            buffer.scroll_down(10)
-                        elif key == "up":
-                            buffer.scroll_up(1)
-                        elif key == "down":
-                            buffer.scroll_down(1)
-                        elif key == "home":
-                            buffer.scroll_to_top()
-                        elif key == "end":
-                            buffer.reset_scroll()
-                        continue
-                    input_state.key(ch)
-
-                submission = input_state.take_submission()
-                if submission is not None:
-                    lowered = submission.strip().lower()
-                    if lowered in {"exit", "quit"}:
-                        break
-                    # Block further submissions until this turn finishes;
-                    # run_turn handles the busy flag. Use a thread so the
-                    # ticker can keep refreshing and Ctrl-C stays responsive.
-                    if turn_thread is not None and turn_thread.is_alive():
-                        turn_thread.join()
-                    turn_thread = threading.Thread(
-                        target=run_turn, args=(submission,), daemon=True
-                    )
-                    turn_thread.start()
-
-                if stop_event.is_set():
-                    break
-        finally:
-            if tty_out_fd >= 0:
-                try:
-                    os.write(tty_out_fd, b"\x1b[?2004l")  # disable bracketed paste
-                except OSError:
-                    pass
-                try:
-                    os.close(tty_out_fd)
-                except OSError:
-                    pass
-            termios.tcsetattr(fd, termios.TCSADRAIN, old_term)
-            if turn_thread is not None and turn_thread.is_alive():
-                turn_thread.join(timeout=5)
-            live_stop.set()
-            stop_event.set()
+    app = EntityTUI(entity, status, stop_event, tasks_dir, responsibilities_dir)
+    app.run()

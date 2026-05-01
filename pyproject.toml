@@ -12,6 +12,7 @@ dependencies = [
     "pydantic-settings>=2.5.0",
     "python-frontmatter>=1.1.0",
     "rich>=13.7",
+    "textual>=8.2.5",
 ]
 
 [tool.hatch.build.targets.wheel]

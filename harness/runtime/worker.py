@@ -139,7 +139,7 @@ class ActiveResponsibility:
     review_interval: str | None
 
 
-def _active_responsibilities(
+def active_responsibilities(
     responsibilities_dir: Path,
 ) -> list[ActiveResponsibility]:
     """Return enabled responsibilities, sorted by last_reviewed ascending
@@ -301,7 +301,7 @@ def run_worker(
             )
             if tick_elapsed and not _planning_task_pending(tasks_dir):
                 due = _due_responsibilities(
-                    _active_responsibilities(responsibilities_dir), now
+                    active_responsibilities(responsibilities_dir), now
                 )
                 if due:
                     try:

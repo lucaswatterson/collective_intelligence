@@ -352,34 +352,35 @@ in the "tasks" panel.
 
 ## 9. The TUI
 
-`harness/ui/tui.py` is built on `rich.live.Live`. The root layout is
-a 2:1 horizontal split (chat on the left, right column minimum 28
-cols). The chat column splits vertically into a chat body and an
-input panel that grows to fit the current prompt. The right column
-splits vertically into a **self-image panel** (shows ASCII art from
-`entity/self_image.txt`, or a placeholder if empty) and a **tasks
-panel** (current worker snapshot plus up to five queued tasks).
+`harness/ui/tui.py` is a [Textual](https://textual.textualize.io/)
+`App`. The root layout is a 2:1 horizontal split (chat on the left,
+right column ~32 cols). The chat column has a scrolling chat body
+above an `Input` widget. The right column splits vertically into a
+**responsibilities panel** (active entries from
+`entity/responsibilities/` with relative `last_reviewed` timestamps,
+oldest first) and a **tasks panel** (current worker snapshot plus
+up to five queued tasks).
 
 ### Threads
-- **Main thread** — `tty.setcbreak`, reads stdin one char at a time
-  via `select`, dispatches to `InputState`.
-- **Ticker thread** — wakes every 100 ms and calls `refresh()`,
-  which re-renders both panels. This is why the worker's `step`
-  counter animates even when you're mid-turn.
-- **Turn thread** — spawned per submission. Runs
-  `entity.turn(text, on_text=...)`. The `on_text` callback appends
-  streaming chunks to a `Text` object in the chat buffer, which the
-  ticker picks up on its next refresh.
+- **UI thread** — Textual's event loop drives all widget updates.
+  A 1 s interval re-renders the responsibilities and tasks panels.
+- **Turn worker** — `run_turn()` is decorated with `@work(thread=True,
+  exclusive=True)`, so each user submission runs `entity.turn(text,
+  on_text=..., on_tool_use=...)` off the UI thread. The callbacks
+  use `app.call_from_thread(...)` to push streaming chunks back into
+  the chat panel safely.
+- **Worker daemon** — separate `entity-worker` thread (set up in
+  `main.py`) is unchanged; the TUI just reads its `WorkerStatus`
+  snapshot on each refresh tick.
 
 ### Input handling
-Raw keystrokes. Enter submits a non-empty line. Backspace / Ctrl-H
-deletes. Ctrl-U clears. Ctrl-C and Ctrl-D-on-empty quit. Typing
-`exit` or `quit` also exits. ESC-prefixed CSI sequences are parsed
-for scrollback: Up/Down scroll the chat by one line, PageUp/PageDown
-by ten, Home jumps to the top, End snaps back to live. While
-scrolled, the chat panel title and border color change to signal
-that new output is hidden. There's no in-line text editing beyond
-backspace.
+A standard Textual `Input` handles keys, cursor, and bracketed paste
+natively. Enter submits a non-empty line. Typing `exit` or `quit`,
+or hitting Ctrl-C / Ctrl-Q, exits the app (and signals the worker
+to stop). Submissions during a turn are ignored until the turn
+completes. The chat body is wrapped in a `VerticalScroll` and
+auto-scrolls to the bottom on each render; scroll back manually with
+the mouse wheel or PageUp/PageDown.
 
 ### Banners
 At session start the TUI shows one of:
@@ -416,9 +417,6 @@ You own these, under `entity/`:
   versions.
 - `work/` — artifacts produced by tasks, organized by task slug.
 - `files/` — general storage.
-- `self_image.txt` — optional ASCII art rendered in the TUI's
-  self-image panel. Write to it and the TUI picks it up on its next
-  refresh.
 - `worker.log` — the worker thread's log output.
 
 You may also see `IDENTITY_HISTORY.md` at the entity root if a skill

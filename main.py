@@ -44,7 +44,13 @@ def main() -> None:
     worker_thread.start()
 
     try:
-        run_tui(chat_entity, status, stop_event, settings.tasks_dir)
+        run_tui(
+            chat_entity,
+            status,
+            stop_event,
+            settings.tasks_dir,
+            settings.responsibilities_dir,
+        )
     finally:
         stop_event.set()
         worker_thread.join(timeout=5)

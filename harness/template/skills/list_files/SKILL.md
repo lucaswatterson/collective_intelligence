@@ -4,7 +4,7 @@ description: List files in a directory under entity/. Returns filenames, sizes, 
 input_schema:
   properties:
     path:
-      description: Directory path relative to the entity/ root (e.g. 'work', 'images/self_images').
+      description: Directory path relative to the entity/ root (e.g. 'work', 'notes').
       type: string
     pattern:
       description: Optional glob pattern to filter results (e.g. '*.md', '*.txt').
@@ -22,7 +22,7 @@ input_schema:
 
 ```
 list_files(path="work")
-list_files(path="images/self_images", pattern="*.txt")
+list_files(path="notes", pattern="*.md")
 list_files(path="memory/long_term", pattern="*.md", recursive=false)
 ```
 

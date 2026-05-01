@@ -87,10 +87,6 @@ class Settings(BaseSettings):
     def identity_history_path(self) -> Path:
         return self.entity_root / "IDENTITY_HISTORY.md"
 
-    @property
-    def self_image_path(self) -> Path:
-        return self.entity_root / "self_image.txt"
-
 
 def load_settings() -> Settings:
     return Settings()  # type: ignore[call-arg]
