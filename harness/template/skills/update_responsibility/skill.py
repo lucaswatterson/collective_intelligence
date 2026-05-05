@@ -1,11 +1,8 @@
 import os
-import re
 import yaml
-from datetime import datetime, timezone
 
 
-_INTERVAL_RE = re.compile(r"^\s*\d+\s*[smhdw]\s*$", re.IGNORECASE)
-_UPDATABLE_FIELDS = ('description', 'enabled', 'review_interval', 'last_reviewed')
+_UPDATABLE_FIELDS = ('description',)
 
 
 def run(**input):
@@ -15,14 +12,6 @@ def run(**input):
 
     if not os.path.exists(filepath):
         return f"Responsibility {name!r} not found."
-
-    if 'review_interval' in input:
-        ri = input['review_interval']
-        if ri is not None and not _INTERVAL_RE.match(str(ri)):
-            return (
-                f"Invalid review_interval {ri!r}: expected a value like "
-                "'30m', '4h', '1d' (units: s/m/h/d/w)."
-            )
 
     with open(filepath, 'r') as f:
         raw = f.read()
@@ -35,17 +24,18 @@ def run(**input):
         fm = {}
         body = raw
 
+    changed = False
     for field in _UPDATABLE_FIELDS:
         if field in input:
             fm[field] = input[field]
+            changed = True
 
     if 'replace_content' in input:
         body = input['replace_content']
+        changed = True
 
-    # Any call to update_responsibility implies the entity touched it; bump
-    # last_reviewed unless the caller passed an explicit value.
-    if 'last_reviewed' not in input:
-        fm['last_reviewed'] = datetime.now(timezone.utc).isoformat()
+    if not changed:
+        return f"No changes provided for {name!r}."
 
     fm_str = yaml.dump(fm, default_flow_style=False, allow_unicode=True, sort_keys=False)
     with open(filepath, 'w') as f:

@@ -1,5 +1,5 @@
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timezone, tzinfo
 from pathlib import Path
 
 import frontmatter
@@ -13,8 +13,8 @@ from textual.message import Message
 from textual.widgets import Static, TextArea
 
 from harness.entity import Entity
+from harness.runtime.schedule import load_schedule, next_fire_time
 from harness.runtime.status import WorkerStatus
-from harness.runtime.worker import active_responsibilities
 
 
 BANNER_BIRTH = (
@@ -54,7 +54,7 @@ def _pending_tasks(tasks_dir: Path) -> list[dict]:
     return tasks
 
 
-def _format_relative(iso_string: str | None) -> str:
+def _format_past(iso_string: str | None) -> str:
     if not iso_string:
         return "never"
     try:
@@ -78,16 +78,63 @@ def _format_relative(iso_string: str | None) -> str:
     return f"{days // 7}w ago"
 
 
-def _render_responsibilities(resp_dir: Path) -> Group:
-    items = active_responsibilities(resp_dir)
-    if not items:
-        return Group(Text("(no active responsibilities)", style="dim italic"))
+def _format_future(target: datetime | None, now: datetime) -> str:
+    if target is None:
+        return "—"
+    delta = target - now
+    secs = int(delta.total_seconds())
+    if secs <= 0:
+        return "due"
+    if secs < 60:
+        return f"in {secs}s"
+    mins = secs // 60
+    if mins < 60:
+        return f"in {mins}m"
+    local = target.astimezone()
+    today = now.astimezone().date()
+    days = (local.date() - today).days
+    clock = local.strftime("%-I:%M%p").lower()
+    if days == 0:
+        return clock
+    if days == 1:
+        return f"tom {clock}"
+    if days < 7:
+        return f"{local.strftime('%a').lower()} {clock}"
+    return local.strftime("%Y-%m-%d")
+
+
+def _render_schedule(schedule_path: Path, scheduler_tz: tzinfo) -> Group:
+    schedule = load_schedule(schedule_path)
+    if not schedule.entries:
+        return Group(Text("(no scheduled entries)", style="dim italic"))
+    now = datetime.now(timezone.utc)
     lines: list[Text] = []
-    for r in items:
-        rel = _format_relative(r.last_reviewed)
-        rel_style = "yellow" if r.last_reviewed is None else "dim"
+    for i, entry in enumerate(schedule.entries):
+        if i:
+            lines.append(Text(""))
+        name_style = "bold cyan" if entry.enabled else "dim strike"
+        header = Text.assemble((entry.name, name_style))
+        if entry.responsibility != entry.name:
+            header.append("  → ", "dim")
+            header.append(entry.responsibility, "dim")
+        lines.append(header)
+
+        if not entry.enabled:
+            lines.append(Text("  disabled", "dim italic"))
+            continue
+        nxt = next_fire_time(entry, now, scheduler_tz)
+        nxt_str = _format_future(nxt, now)
+        nxt_style = "yellow" if nxt is not None and nxt <= now else "white"
+        last_str = _format_past(entry.last_run)
+        last_style = "yellow" if entry.last_run is None else "dim"
         lines.append(
-            Text.assemble((r.name, "cyan"), ("  ·  ", "dim"), (rel, rel_style))
+            Text.assemble(
+                ("  next ", "dim"),
+                (nxt_str, nxt_style),
+                ("  ·  ", "dim"),
+                ("last ", "dim"),
+                (last_str, last_style),
+            )
         )
     return Group(*lines)
 
@@ -200,14 +247,16 @@ class EntityTUI(App):
         status: WorkerStatus,
         stop_event: threading.Event,
         tasks_dir: Path,
-        responsibilities_dir: Path,
+        schedule_path: Path,
+        scheduler_tz: tzinfo,
     ) -> None:
         super().__init__()
         self.entity = entity
         self.status = status
         self.stop_event = stop_event
         self.tasks_dir = tasks_dir
-        self.responsibilities_dir = responsibilities_dir
+        self.schedule_path = schedule_path
+        self.scheduler_tz = scheduler_tz
         self._entries: list[Text] = []
         self._streaming: Text | None = None
         self._busy = False
@@ -225,7 +274,7 @@ class EntityTUI(App):
     def on_mount(self) -> None:
         self.entity.begin_session()
         self.query_one("#chat-scroll", VerticalScroll).border_title = "entity"
-        self.query_one("#resp", Static).border_title = "responsibilities"
+        self.query_one("#resp", Static).border_title = "schedule"
         self.query_one("#tasks", Static).border_title = "tasks"
         self.query_one("#input", ChatInput).border_title = "you"
         if self.entity.in_birth:
@@ -239,7 +288,7 @@ class EntityTUI(App):
 
     def _refresh_panels(self) -> None:
         self.query_one("#resp", Static).update(
-            _render_responsibilities(self.responsibilities_dir)
+            _render_schedule(self.schedule_path, self.scheduler_tz)
         )
         self.query_one("#tasks", Static).update(
             _render_tasks(self.status, self.tasks_dir)
@@ -331,7 +380,10 @@ def run_tui(
     status: WorkerStatus,
     stop_event: threading.Event,
     tasks_dir: Path,
-    responsibilities_dir: Path,
+    schedule_path: Path,
+    scheduler_tz: tzinfo,
 ) -> None:
-    app = EntityTUI(entity, status, stop_event, tasks_dir, responsibilities_dir)
+    app = EntityTUI(
+        entity, status, stop_event, tasks_dir, schedule_path, scheduler_tz
+    )
     app.run()

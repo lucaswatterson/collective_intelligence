@@ -2,10 +2,7 @@
 name: memory_consolidation
 description: Reflect on recent sessions and distill only durable, decision-changing
   insights into long-term memory.
-enabled: true
-review_interval: 12h
 created: '2026-05-01T21:59:31.393259+00:00'
-last_reviewed: null
 ---
 
 ## Contract

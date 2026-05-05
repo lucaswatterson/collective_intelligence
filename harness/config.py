@@ -1,4 +1,5 @@
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 from pydantic import Field
@@ -22,10 +23,9 @@ class Settings(BaseSettings):
 
     anthropic_api_key: str = Field(..., alias="ANTHROPIC_API_KEY")
     worker_poll_interval: float = Field(10.0, alias="WORKER_POLL_INTERVAL")
-    # Floor on how often the worker enqueues a planning tick when the queue is
-    # idle. Per-responsibility `review_interval` does the actual cadence work;
-    # this just bounds wake-up frequency.
-    planning_cooldown_minutes: float = Field(1.0, alias="RESPONSIBILITIES_COOLDOWN_MINUTES")
+    # IANA timezone name used to interpret cron expressions in SCHEDULE.md and
+    # to display next-fire times in the TUI. Stored timestamps remain UTC.
+    scheduler_timezone: str = Field("UTC", alias="SCHEDULER_TIMEZONE")
 
     repo_root: Path = REPO_ROOT
     harness_root: Path = HARNESS_ROOT
@@ -62,6 +62,14 @@ class Settings(BaseSettings):
     @property
     def responsibilities_dir(self) -> Path:
         return self.entity_root / "responsibilities"
+
+    @property
+    def schedule_path(self) -> Path:
+        return self.entity_root / "SCHEDULE.md"
+
+    @property
+    def scheduler_tz(self) -> ZoneInfo:
+        return ZoneInfo(self.scheduler_timezone)
 
     @property
     def work_dir(self) -> Path:

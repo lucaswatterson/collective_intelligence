@@ -35,8 +35,9 @@ def main() -> None:
             stop_event,
             settings.tasks_dir,
             settings.responsibilities_dir,
+            settings.schedule_path,
+            settings.scheduler_tz,
             settings.worker_poll_interval,
-            settings.planning_cooldown_minutes,
         ),
         daemon=True,
         name="entity-worker",
@@ -49,7 +50,8 @@ def main() -> None:
             status,
             stop_event,
             settings.tasks_dir,
-            settings.responsibilities_dir,
+            settings.schedule_path,
+            settings.scheduler_tz,
         )
     finally:
         stop_event.set()

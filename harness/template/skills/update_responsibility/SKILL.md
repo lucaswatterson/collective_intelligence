@@ -1,8 +1,7 @@
 ---
-description: Update a responsibility — change description, enabled, review_interval,
-  or replace its body. Any call automatically bumps `last_reviewed` to now (so a
-  no-op call with just `name` works as "I reviewed this and decided nothing was
-  needed").
+description: Update a responsibility — change its description or replace its body.
+  Timing lives in SCHEDULE.md (see `manage_schedule`); this skill does not touch
+  cadence.
 input_schema:
   properties:
     name:
@@ -10,19 +9,6 @@ input_schema:
       type: string
     description:
       description: New one-line description.
-      type: string
-    enabled:
-      description: Toggle whether this responsibility surfaces in planning ticks.
-      type: boolean
-    review_interval:
-      description: How often this responsibility wants attention. Human-friendly
-        string like '30m', '4h', '1d', '1w'. Pass null to clear (review on every
-        tick).
-      type: string
-    last_reviewed:
-      description: ISO timestamp marking when you most recently reviewed this.
-        Normally you don't pass this — it auto-bumps to now on every call. Pass
-        an explicit value only to backdate or override.
       type: string
     replace_content:
       description: Fully replace the body (the contract section). Use for genuine
@@ -33,6 +19,6 @@ input_schema:
   type: object
 ---
 
-Calling `update_responsibility(name=...)` with no other arguments is a valid "mark as reviewed" — it bumps `last_reviewed` to now so the responsibility doesn't resurface until its `review_interval` elapses again.
+The body is the contract — what gets inlined into a task whenever the schedule fires for this responsibility. Edit it when the actual procedure or principles change. Don't journal in it; logging belongs in task transcripts and long-term memory.
 
-There is no `append_content` / journal mode. Logging belongs in task transcripts and long-term memory, not inside the responsibility file. The body is the contract; keep it stable.
+To change *when* this responsibility runs, use `manage_schedule` (action='update') — the schedule entry owns timing.

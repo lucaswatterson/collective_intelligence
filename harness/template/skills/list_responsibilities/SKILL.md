@@ -1,10 +1,10 @@
 ---
-description: List all responsibilities in entity/responsibilities/ with enabled state,
-  description, review_interval, and last_reviewed. Sorted by last_reviewed
-  ascending so neglected ones surface first.
+description: List all responsibilities in entity/responsibilities/ with their
+  descriptions, sorted by name. Timing is owned by SCHEDULE.md — use
+  `manage_schedule` (action='list') to see what's scheduled.
 input_schema:
   properties: {}
   type: object
 ---
 
-Returns one line per responsibility. Disabled responsibilities are included so you can see your full surface area.
+Returns one line per responsibility. To see which responsibilities are wired to a cadence, list the schedule.
