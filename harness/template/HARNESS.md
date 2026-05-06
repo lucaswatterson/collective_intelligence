@@ -328,17 +328,37 @@ in `harness/runtime/worker.py`, which delegates to
    - Entries with `last_run: null` are initialized to `now` and wait
      for one full period before firing — a freshly added entry doesn't
      fire immediately.
-3. For each due entry, the worker reads the referenced responsibility
-   file, calls `render_task_for_entry(entry, responsibility_path)` to
-   build a task body that wraps the responsibility's contract with a
-   short framing header and a `complete_task` reminder, and writes
+3. **Guard check (optional).** Before enqueueing, if the entry has a
+   `guard:` field, the worker calls the named predicate via
+   `harness/runtime/guards.py:evaluate_guard`. The guards registry is
+   *discovered*, not hard-coded: each `*.py` plugin under
+   `entity/guards/` contributes a top-level `GUARDS` mapping, so a
+   fresh harness with no integrations installed has an empty registry.
+   Integrations like Google Workspace ship their own guard module
+   (`integrations/google/guards.py`, copied to `entity/guards/google.py`
+   by the install script). If the guard returns `False`, the worker
+   snaps `last_run` forward and skips the enqueue — no task, no LLM
+   call. This is how cheap "is there anything to do?" checks (e.g. an
+   empty inbox) avoid paying for a full Sonnet+thinking turn just to
+   read "0 unread." Guards fail *open*: any subprocess error, parse
+   failure, or unknown name logs a warning and enqueues anyway. An LLM
+   call is cheaper than a missed signal. The skill `manage_schedule`
+   validates guard names against the registry at edit time so typos
+   are caught early; see its `SKILL.md` for usage and `guards.py` for
+   the discovery loader.
+4. For each due entry that survives the guard, the worker reads the
+   referenced responsibility file, calls `render_task_for_entry(entry,
+   responsibility_path)` to build a task body that wraps the
+   responsibility's contract with a short framing header and a
+   `complete_task` reminder, and writes
    `entity/tasks/<timestamp>_<entry_name>.md` with frontmatter
    `{title, status: todo, priority: medium, tags: [scheduled,
    <entry_name>], author: harness, schedule_entry: <name>,
    responsibility: <stem>}`.
-4. `mark_fired(entry, now)` snaps the entry's `last_run` to `now`. The
-   schedule is saved once at the end of the pass (single write per
-   cycle), even if multiple entries fired.
+5. `mark_fired(entry, now)` snaps the entry's `last_run` to `now` —
+   whether the entry was enqueued or skipped by a guard. The schedule
+   is saved once at the end of the pass (single write per cycle), even
+   if multiple entries fired or were skipped.
 
 **Catch-up is fire-once.** If many cron firings or interval periods
 elapsed while the worker was off, exactly one task is enqueued per
@@ -533,6 +553,13 @@ first prompt:
   `manage_schedule` (action='add'). The same responsibility can be
   scheduled multiple ways, or temporarily detached without losing the
   contract.
+- **Guards skip the LLM call when there's nothing to do.** A schedule
+  entry can name a `guard` (a predicate discovered from
+  `entity/guards/*.py` — integrations ship their own plugin module).
+  When the entry comes due, the worker runs the guard first; if it
+  returns false, `last_run` advances and no task is enqueued. Guards
+  fail open — errors enqueue rather than silently miss work. Use them
+  for pollers whose first step is "look for X, exit if none."
 - **Tool errors don't crash you.** `registry.execute` catches skill
   exceptions and returns them as `"Error executing skill '<name>': ..."`
   strings in the tool result — you see the failure and can adjust.

@@ -103,6 +103,7 @@ class ScheduleEntry:
     cron: str | None = None
     enabled: bool = True
     last_run: str | None = None
+    guard: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -115,6 +116,8 @@ class ScheduleEntry:
             d["cron"] = self.cron
         d["enabled"] = self.enabled
         d["last_run"] = self.last_run
+        if self.guard is not None:
+            d["guard"] = self.guard
         return d
 
 
@@ -156,6 +159,9 @@ def load_schedule(path: Path) -> Schedule:
                         if raw.get("last_run") not in (None, "")
                         else None
                     ),
+                    guard=str(raw["guard"])
+                    if raw.get("guard") not in (None, "")
+                    else None,
                 )
             )
         except KeyError as e:

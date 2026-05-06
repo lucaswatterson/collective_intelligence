@@ -9,6 +9,7 @@ from pathlib import Path
 import frontmatter
 
 from harness.entity import Entity
+from harness.runtime.guards import evaluate_guard
 from harness.runtime.schedule import (
     ScheduleEntry,
     evaluate_schedule,
@@ -123,6 +124,14 @@ def _process_schedule(
             log.warning(
                 "schedule entry %s references missing responsibility %s; skipping",
                 entry.name, entry.responsibility,
+            )
+            continue
+        if entry.guard and not evaluate_guard(entry.guard):
+            mark_fired(entry, now)
+            mutated = True
+            log.info(
+                "schedule: %s due, guard %s -> False, skipping enqueue",
+                entry.name, entry.guard,
             )
             continue
         try:

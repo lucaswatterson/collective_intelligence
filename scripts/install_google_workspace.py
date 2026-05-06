@@ -20,6 +20,7 @@ from harness.config import load_settings
 
 
 SOURCE_DIR = REPO_ROOT / "integrations" / "google" / "skills"
+GUARDS_SOURCE = REPO_ROOT / "integrations" / "google" / "guards.py"
 
 
 def install(force: bool) -> int:
@@ -53,12 +54,34 @@ def install(force: bool) -> int:
             shutil.copytree(src, dst, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
             installed.append(src.name)
 
+    guards_dest_dir = settings.guards_dir
+    guards_dest_dir.mkdir(parents=True, exist_ok=True)
+    guards_dst = guards_dest_dir / "google.py"
+    guards_status: str | None = None
+    if not GUARDS_SOURCE.exists():
+        print(f"Warning: guards plugin not found at {GUARDS_SOURCE}; skipping")
+    elif guards_dst.exists():
+        if force:
+            shutil.copy2(GUARDS_SOURCE, guards_dst)
+            guards_status = "overwritten"
+        else:
+            guards_status = "skipped"
+    else:
+        shutil.copy2(GUARDS_SOURCE, guards_dst)
+        guards_status = "installed"
+
     for name in installed:
         print(f"Installed: entity/skills/{name}/")
     for name in overwritten:
         print(f"Overwrote: entity/skills/{name}/")
     for name in skipped:
         print(f"Skipped (already present): entity/skills/{name}/")
+    if guards_status == "installed":
+        print("Installed: entity/guards/google.py")
+    elif guards_status == "overwritten":
+        print("Overwrote: entity/guards/google.py")
+    elif guards_status == "skipped":
+        print("Skipped (already present): entity/guards/google.py")
     if skipped and not force:
         print("(re-run with --force to overwrite skipped skills)")
 

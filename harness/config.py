@@ -56,6 +56,10 @@ class Settings(BaseSettings):
         return self.entity_root / "skills"
 
     @property
+    def guards_dir(self) -> Path:
+        return self.entity_root / "guards"
+
+    @property
     def tasks_dir(self) -> Path:
         return self.entity_root / "tasks"
 

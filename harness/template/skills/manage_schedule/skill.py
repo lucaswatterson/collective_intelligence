@@ -3,6 +3,7 @@ import re
 
 import yaml
 
+from harness.runtime.guards import load_guards
 from harness.runtime.schedule import parse_cron
 
 
@@ -10,6 +11,21 @@ SCHEDULE_PATH = 'entity/SCHEDULE.md'
 RESPONSIBILITIES_DIR = 'entity/responsibilities'
 NAME_RE = re.compile(r"^[a-z0-9_]+$")
 INTERVAL_RE = re.compile(r"^\s*\d+\s*[smhdw]\s*$", re.IGNORECASE)
+
+
+def _validate_guard(guard: object) -> str | None:
+    if guard in (None, ''):
+        return None
+    guards = load_guards()
+    if str(guard) not in guards:
+        known = ", ".join(sorted(guards)) or "(none registered)"
+        return (
+            f"Unknown guard {guard!r}. Registered guards: {known}. "
+            "Guards are pre-flight predicates that skip enqueueing when there's "
+            "nothing to do (e.g. 'gmail_has_unread' skips manage_email when the "
+            "inbox is empty)."
+        )
+    return None
 
 
 def _load() -> tuple[list[dict], str]:
@@ -55,17 +71,24 @@ def _validate_cadence(interval: object, cron: object) -> str | None:
 
 
 def _list(entries: list[dict]) -> str:
+    known_guards = ", ".join(sorted(load_guards())) or "(none registered)"
     if not entries:
-        return "No schedule entries."
+        return f"No schedule entries.\n\nAvailable guards: {known_guards}"
     lines = []
     for e in entries:
         cadence = e.get('interval') or e.get('cron') or '—'
         state = 'enabled' if e.get('enabled', True) else 'disabled'
         last = e.get('last_run') or 'never'
-        lines.append(
+        guard = e.get('guard')
+        row = (
             f"- {e.get('name', '?')} ({state}) → {e.get('responsibility', '?')}\n"
             f"    cadence={cadence}  last_run={last}"
         )
+        if guard:
+            row += f"  guard={guard}"
+        lines.append(row)
+    lines.append("")
+    lines.append(f"Available guards: {known_guards}")
     return "\n".join(lines)
 
 
@@ -88,6 +111,10 @@ def _add(entries: list[dict], body: str, **input) -> str:
     err = _validate_cadence(interval, cron)
     if err:
         return err
+    guard = input.get('guard')
+    err = _validate_guard(guard)
+    if err:
+        return err
     entry: dict = {'name': name, 'responsibility': responsibility}
     if interval not in (None, ''):
         entry['interval'] = str(interval)
@@ -95,9 +122,12 @@ def _add(entries: list[dict], body: str, **input) -> str:
         entry['cron'] = str(cron)
     entry['enabled'] = bool(input.get('enabled', True))
     entry['last_run'] = None
+    if guard not in (None, ''):
+        entry['guard'] = str(guard)
     entries.append(entry)
     _save(entries, body)
-    return f"Schedule entry added: {name} → {responsibility} ({entry.get('interval') or entry.get('cron')})"
+    suffix = f" guard={entry['guard']}" if 'guard' in entry else ""
+    return f"Schedule entry added: {name} → {responsibility} ({entry.get('interval') or entry.get('cron')}){suffix}"
 
 
 def _update(entries: list[dict], body: str, **input) -> str:
@@ -138,6 +168,16 @@ def _update(entries: list[dict], body: str, **input) -> str:
 
     if 'enabled' in input:
         target['enabled'] = bool(input['enabled'])
+
+    if 'guard' in input:
+        guard = input['guard']
+        if guard in (None, ''):
+            target.pop('guard', None)
+        else:
+            err = _validate_guard(guard)
+            if err:
+                return err
+            target['guard'] = str(guard)
 
     _save(entries, body)
     return f"Schedule entry updated: {name}"

@@ -94,9 +94,30 @@ advances that cursor for the whole space at once.
   RFC3339 timestamp). Affects the whole space — there's no per-message
   read flag in the Chat API.
 
+## Schedule guards
+
+This integration ships two pre-flight guards alongside the skills (defined in
+`integrations/google/guards.py` and copied to `entity/guards/google.py` by the
+install script above). The harness discovers them from `entity/guards/` at
+runtime, so they only register on harnesses where this integration is
+installed. Attach one to a schedule entry via `manage_schedule`'s `guard:`
+parameter to skip the entire LLM turn when there's nothing to triage:
+
+- **`gmail_has_unread`** — runs `gws gmail +triage --max 1` and returns true
+  iff at least one unread message comes back. Pair with a `manage_email`
+  responsibility.
+- **`gchat_has_unread`** — lists Chat spaces and stops on the first space
+  whose newest message is later than its `spaceReadState.lastReadTime`. Pair
+  with a `manage_chat` responsibility.
+
+Both fail open (errors enqueue the task anyway), so a flaky `gws` call won't
+silently swallow a real message. Add them when registering the schedule
+entry — e.g. `manage_schedule action=add name=manage_email
+responsibility=manage_email cron='*/30 8-20 * * 1-5' guard=gmail_has_unread`.
+
 ## Removing the integration
 
-Delete the copied skill directories:
+Delete the copied skill directories and the guards plugin:
 
 ```
 rm -rf entity/skills/read_email/ entity/skills/read_email_message/ \
@@ -105,7 +126,9 @@ rm -rf entity/skills/read_email/ entity/skills/read_email_message/ \
        entity/skills/list_chat_spaces/ entity/skills/read_chat_unread/ \
        entity/skills/read_chat_message/ entity/skills/reply_chat_message/ \
        entity/skills/send_chat_message/ entity/skills/mark_chat_space_read/
+rm -f  entity/guards/google.py
 ```
 
-The entity loses Google access on next skill rediscovery. Nothing under
-`harness/` needs to change.
+The entity loses Google access on next skill rediscovery, and the
+`gmail_has_unread` / `gchat_has_unread` guards drop out of the registry
+the next time `load_guards()` runs. Nothing under `harness/` needs to change.
