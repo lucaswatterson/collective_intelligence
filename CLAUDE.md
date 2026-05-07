@@ -1,13 +1,16 @@
 # Collective Intelligence
 
-A Python harness that hosts a persistent, self-modifying AI entity. The entity runs in two modes simultaneously: an interactive Rich TUI for chatting with the human, and a background daemon worker that picks up tasks from the filesystem and executes them autonomously. State is 100% filesystem-based — no database, no cloud.
+A Python harness that hosts a persistent, self-modifying AI entity. The entity runs in two modes: an interactive Rich TUI for chatting with the human, and a background worker that picks up tasks from the filesystem and executes them autonomously. The two can run together in one process, or the worker can run headless and the TUI can attach to it later. State is 100% filesystem-based — no database, no cloud.
 
 ## Commands
 
 All commands use `uv` — never invoke `python` or `pip` directly.
 
 - `uv sync` — install/update dependencies from `uv.lock`
-- `uv run main.py` — start the entity (TUI + worker thread)
+- `uv run ci tui` — start the entity. Auto-detects via `entity/worker.pid`: if no worker is running, spawns TUI + worker thread; if one is already running, just attaches a TUI.
+- `uv run ci worker start` — launch the worker as a detached background process. Returns immediately; logs go to `entity/worker.log`. Refuses if another worker is already running.
+- `uv run ci worker stop` — `SIGTERM` the running worker and wait up to 10 s for it to exit.
+- `uv run ci worker status` — print whether a worker is running, its PID, and its current activity (from `entity/worker_status.json`).
 - `uv run scripts/reset_entity.py` — wipe entity state (destructive; ask first)
 - `uv add <pkg>` / `uv remove <pkg>` — manage dependencies (updates `pyproject.toml` and `uv.lock` together)
 
@@ -26,7 +29,9 @@ The entity has its own system prompt (`entity/IDENTITY.md`, or `BIRTH.md` at the
 
 ## Architecture essentials
 
-- `main.py` creates two `Entity` instances (one for TUI, one for the worker) and a daemon thread. Graceful shutdown on exit via a `stop_event` with a 5s timeout.
+- `harness/cli.py` is the entry point for the `ci` console script. It exposes three runtime modes via subcommands: combined (`ci tui` when no worker is running — TUI + worker thread), headless (`ci worker start` spawns a detached child whose `_run` subcommand runs the worker on the main thread with `SIGINT`/`SIGTERM` handlers), and TUI-only (`ci tui` when a worker is already running — attaches via `FileBackedWorkerStatus`). Mode for `ci tui` is decided by checking `entity/worker.pid`. Combined mode creates two `Entity` instances and a daemon thread; graceful shutdown via a `stop_event` with a 5 s timeout. TUI-only mode does not signal the external worker on exit. `ci worker start` itself just `Popen`s the child with `start_new_session=True` and polls for the PID file before returning.
+- **Cross-process status** (`harness/runtime/status.py`): `WorkerStatus` writes a JSON snapshot to `entity/worker_status.json` on every state change so a TUI in another process can read it. `FileBackedWorkerStatus(path)` is the read-only adapter the attached TUI uses; both expose the same `.snapshot()` API.
+- **PID file** (`harness/runtime/lifecycle.py`): the worker writes its PID to `entity/worker.pid` on start and removes it on clean shutdown. `worker_already_running()` returns the PID if alive (via `os.kill(pid, 0)`); a stale file is ignored and overwritten.
 - **Memory** (`harness/memory/`): `store.py` appends to per-session transcripts; `long_term.py` manages consolidated memories with YAML frontmatter and auto-rebuilds `INDEX.md`.
 - **Skills** (`harness/skills/`): `loader.py` discovers `entity/skills/*/SKILL.md`, dynamically imports `skill.py`, validates. `meta.py` handles the staged create/update/delete flow for self-modification.
 - **Runtime** (`harness/runtime/`): `worker.py` polls `entity/tasks/`, picks next `status: todo` task by (priority → created → filename). Each cycle it also runs a *schedule pass*: `schedule.py` reads `entity/SCHEDULE.md`, and for any entry whose `interval` or `cron` cadence is due (relative to `last_run`), the worker reads the referenced responsibility, inlines its body into a fresh task, and snaps `last_run` to now. Catch-up is fire-once — a long offline period produces one task per overdue entry, not a flood. Exceptions mark a task `blocked` and append a traceback.

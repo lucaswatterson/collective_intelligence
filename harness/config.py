@@ -44,6 +44,14 @@ class Settings(BaseSettings):
         return self.entity_root / "worker.log"
 
     @property
+    def worker_pid_path(self) -> Path:
+        return self.entity_root / "worker.pid"
+
+    @property
+    def worker_status_path(self) -> Path:
+        return self.entity_root / "worker_status.json"
+
+    @property
     def identity_path(self) -> Path:
         return self.entity_root / "IDENTITY.md"
 

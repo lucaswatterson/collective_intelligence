@@ -23,20 +23,23 @@ cp .env.example .env
 # then edit .env and set ANTHROPIC_API_KEY=sk-ant-...
 
 # 4. Start the entity
-uv run main.py
+uv run ci tui
 ```
 
 On first launch, the harness bootstraps an `entity/` directory from [harness/template/](harness/template/) — identity, skills, and memory scaffolding. `entity/IDENTITY.md` starts empty and the TUI banner reads `entity unborn · begin the birth conversation`. Have a real conversation with the entity about who it should be — name, values, voice, focus, how it should collaborate with you. When it's ready, it calls `commit_identity` itself. From that moment on, the worker thread will start on every launch and the entity will pick up tasks autonomously.
 
 Useful commands:
 
-- `uv run main.py` — start the entity (TUI + worker)
+- `uv run ci tui` — start the entity. If no worker is running, this starts both the TUI and a worker thread. If a headless worker is already running, this just attaches a TUI to it.
+- `uv run ci worker start` — launch the background worker as a detached process. Returns immediately; logs go to `entity/worker.log`.
+- `uv run ci worker stop` — send `SIGTERM` to the running worker and wait for it to exit.
+- `uv run ci worker status` — print whether a worker is running, its PID, and its current activity.
 - `uv run scripts/reset_entity.py` — wipe entity state and start over (destructive)
 - `uv add <pkg>` / `uv remove <pkg>` — manage dependencies
 
-To give the entity work, drop a Markdown file with `status: todo` frontmatter into `entity/tasks/`, or ask it in chat to create one. The worker picks it up on its next poll (default 10s, configurable via `WORKER_POLL_INTERVAL` — see [harness/config.py:24](harness/config.py:24)).
+To give the entity work, drop a Markdown file with `status: todo` frontmatter into `entity/tasks/`, or ask it in chat to create one. The worker picks it up on its next poll (default 10s, configurable via `WORKER_POLL_INTERVAL` — see [harness/config.py:25](harness/config.py:25)).
 
-Exit the TUI with `Ctrl-C`, `Ctrl-D` on an empty line, or by typing `exit`. The worker is given 5 seconds to finish its current task before the process terminates ([main.py:49](main.py:49)).
+Exit the TUI with `Ctrl-C`, `Ctrl-D` on an empty line, or by typing `exit`. If the TUI started its own worker thread, the worker is given 5 seconds to finish its current task before the process terminates. If the TUI is attached to a separately-launched headless worker, exiting the TUI leaves that worker running.
 
 ## How does Collective Intelligence work?
 
@@ -51,7 +54,7 @@ Two top-level directories with very different roles:
 
 ### The runtime
 
-[main.py](main.py) wires everything together. It constructs **two `Entity` instances** that share the filesystem but not in-memory state:
+[harness/cli.py](harness/cli.py) wires everything together. It constructs **two `Entity` instances** that share the filesystem but not in-memory state:
 
 1. A **chat entity** that runs on the main thread inside the TUI ([harness/ui/tui.py](harness/ui/tui.py)). Streaming is on, so the human watches tokens arrive in real time.
 2. A **worker entity** that runs on a daemon thread ([harness/runtime/worker.py](harness/runtime/worker.py)). It polls `entity/tasks/`, picks the next `status: todo` task by priority → created → filename, marks it `in-progress`, and hands it to the entity's autonomous tool loop. Streaming is off; exceptions mark the task `blocked` and append a traceback.
