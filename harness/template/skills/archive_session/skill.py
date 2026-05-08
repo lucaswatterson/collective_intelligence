@@ -1,7 +1,20 @@
 import shutil
+from pathlib import Path
 
 from harness.config import load_settings
-from harness.memory.long_term import resolve_partial
+
+
+def _resolve_session(short_term_dir: Path, session: str) -> Path | list[Path] | None:
+    name = session if session.endswith(".md") else f"{session}.md"
+    direct = short_term_dir / name
+    if direct.exists():
+        return direct
+    matches = sorted(short_term_dir.glob(f"*{session}*"))
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        return matches
+    return None
 
 
 def run(**input):
@@ -20,7 +33,7 @@ def run(**input):
     if not short_term_dir.exists():
         return "No short-term memory directory found."
 
-    result = resolve_partial(short_term_dir, session, exclude="__never__")
+    result = _resolve_session(short_term_dir, session)
     if result is None:
         if (archive_dir / name).exists():
             return f"Session already archived: {name}"

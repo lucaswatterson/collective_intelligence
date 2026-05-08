@@ -241,7 +241,7 @@ class Entity:
         index_text = index_path.read_text(encoding="utf-8") if index_path.exists() else ""
         if index_text.strip():
             parts.append(
-                "Your long-term memory index. Use `read_memory` to pull any entry in full.\n\n"
+                "Your long-term memory index. Use `manage_memory` with `action: read` to pull any entry in full.\n\n"
                 + index_text
             )
         if include_recent_transcripts:

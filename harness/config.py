@@ -14,7 +14,7 @@ ENTITY_ROOT = REPO_ROOT / "entity"
 
 class Models:
     REASONING = "claude-opus-4-7"
-    DEFAULT = "claude-haiku-4-5"
+    DEFAULT = "claude-sonnet-4-6"
     FAST = "claude-haiku-4-5"
 
 

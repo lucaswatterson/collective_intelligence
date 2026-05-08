@@ -262,25 +262,31 @@ Task sessions look the same but are named `..._task_<slug>.md` so
 they're distinguishable.
 
 ### Long-term
-`harness/memory/long_term.py` handles the consolidated layer.
+The harness owns the directory layout but no memory-format code; the
+long-term layer is entirely skill-driven.
 
 - Files live in `entity/memory/long_term/`. Each has YAML
   frontmatter: `title`, `category` (one of `user`, `self`,
   `collaboration`, `lesson`, `reference`), `confidence`,
   `source_sessions` (list of short-term stems), `created`, `updated`,
   optional `tags`.
-- `rebuild_index(long_term_dir, index_path)` scans the folder and
-  writes `INDEX.md` grouped by category with a one-line gist per
-  entry. This runs whenever a memory is written.
-- `consolidated_session_stems(long_term_dir)` returns the set of
-  short-term stems already captured in long-term — used by
-  `consolidate_memory` to avoid re-processing sessions.
-- `resolve_partial(dir, filename)` is a fuzzy lookup for skills that
-  want to accept a partial filename.
+- `INDEX.md` is a category-grouped index with a one-line gist per
+  entry. The `manage_memory` skill rebuilds it after every mutating
+  action (create / update / delete).
+- `manage_memory` is one skill with an `action` discriminator
+  (`create | update | delete | read | list | unconsolidated`). It
+  owns the frontmatter parsing, file rendering, INDEX rebuild, and
+  partial filename resolution for long-term memory. The
+  `unconsolidated` action returns the short-term stems that aren't
+  yet referenced by any long-term memory's `source_sessions` — used
+  as the entry point for consolidation.
 
-Consolidation itself is skill-driven (`consolidate_memory`,
-`create_memory`, `update_memory`, `archive_session`). The harness
-doesn't schedule it — you do, when it matters.
+Consolidation is responsibility-driven: the `memory_consolidation`
+responsibility tells me to call `manage_memory action=unconsolidated`,
+read the unconsolidated transcripts via `read_file`, write distilled
+insights with `manage_memory`, and `archive_session` each one when
+done. The harness doesn't schedule it — the schedule does, via the
+responsibility.
 
 ## 8. The worker loop
 

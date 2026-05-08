@@ -15,6 +15,6 @@ input_schema:
 
 ## Usage
 
-- Call once per session after you've captured its lasting content via `create_memory` / `update_memory`.
+- Call once per session after you've captured its lasting content via `manage_memory` (`action: create` / `action: update`).
 - The archive lives alongside the live dir: `entity/memory/short_term_archive/`. It is searchable but not injected as context on future sessions.
-- Never call on a session you haven't consolidated — that session's transcript will no longer be considered "unconsolidated" by future `consolidate_memory` calls.
+- Never call on a session you haven't consolidated — that session's transcript will no longer be considered "unconsolidated" by future `manage_memory action=unconsolidated` calls.
