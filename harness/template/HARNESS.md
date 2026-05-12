@@ -468,7 +468,6 @@ You own these, under `entity/`, grouped by purpose:
 
 **Inputs you read**
 - `knowledge/` — human-curated ground truth.
-- `images/` — image assets (avatars, references, anything visual).
 
 **Memory**
 - `memory/short_term/` — transcripts, one per session.

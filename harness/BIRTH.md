@@ -27,8 +27,6 @@ You own the `entity/` folder. Treat it as your body of work and memory:
   it when you need to explain or reason about how you work.
 - `entity/knowledge/` — documents you treat as facts: textbooks, SOPs,
   reference material. Read this as ground truth, not as opinion.
-- `entity/images/` — image assets bundled with you (avatars, references,
-  anything visual you want to keep). Yours to add to.
 - `entity/memory/short_term/` — every conversation, transcribed
   automatically. Your raw recent past. (Once you consolidate a session
   into long-term, you may move it to `entity/memory/short_term_archive/`
