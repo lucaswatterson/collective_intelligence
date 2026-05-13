@@ -24,8 +24,13 @@ class Settings(BaseSettings):
     anthropic_api_key: str = Field(..., alias="ANTHROPIC_API_KEY")
     worker_poll_interval: float = Field(10.0, alias="WORKER_POLL_INTERVAL")
     # IANA timezone name used to interpret cron expressions in SCHEDULE.md and
-    # to display next-fire times in the TUI. Stored timestamps remain UTC.
+    # to display next-fire times in the UI. Stored timestamps remain UTC.
     scheduler_timezone: str = Field("UTC", alias="SCHEDULER_TIMEZONE")
+
+    web_password_hash: str = Field("", alias="WEB_PASSWORD_HASH")
+    web_session_secret: str = Field("", alias="WEB_SESSION_SECRET")
+    web_host: str = Field("127.0.0.1", alias="WEB_HOST")
+    web_port: int = Field(8000, alias="WEB_PORT")
 
     repo_root: Path = REPO_ROOT
     harness_root: Path = HARNESS_ROOT
@@ -102,6 +107,14 @@ class Settings(BaseSettings):
     @property
     def long_term_index_path(self) -> Path:
         return self.long_term_dir / "INDEX.md"
+
+    @property
+    def knowledge_dir(self) -> Path:
+        return self.entity_root / "knowledge"
+
+    @property
+    def knowledge_index_path(self) -> Path:
+        return self.knowledge_dir / "INDEX.md"
 
     @property
     def identity_history_path(self) -> Path:

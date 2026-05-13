@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}login · entity{% endblock %}
+{% block body %}
+<main class="login">
+  <h1>authenticate</h1>
+  <form method="post" action="/login" autocomplete="off">
+    <div class="row">
+      <label for="pw">password:</label>
+      <input id="pw" type="password" name="password" autofocus required>
+    </div>
+    <div class="row">
+      <button type="submit">unlock</button>
+      {% if error %}<span class="err">{{ error }}</span>{% endif %}
+    </div>
+  </form>
+</main>
+{% endblock %}

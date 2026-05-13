@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}entity{% endblock %}
+{% block body %}
+<div class="layout">
+  <section class="chat">
+    <header>
+      <h1>{{ entity_name }}</h1>
+      <form method="post" action="/logout" class="logout">
+        <button type="submit">exit</button>
+      </form>
+    </header>
+    {% if in_birth %}
+    <p class="birth-banner">entity unborn · begin the birth conversation · tasks dormant until IDENTITY.md is committed</p>
+    {% endif %}
+    <div id="messages" class="messages"></div>
+    <form id="composer"
+          hx-post="/turn"
+          hx-target="#messages"
+          hx-swap="beforeend"
+          hx-on::after-request="if(event.detail.successful){this.reset();this.querySelector('textarea').focus();}">
+      <textarea name="message" rows="6" required autofocus
+                onkeydown="if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing){event.preventDefault();this.form.requestSubmit();}"></textarea>
+      <button type="submit">send</button>
+    </form>
+  </section>
+  <aside id="status-panel"
+         hx-ext="sse"
+         sse-connect="/status/stream"
+         sse-swap="message"
+         hx-swap="innerHTML">
+    <p class="dim">connecting…</p>
+  </aside>
+</div>
+
+<dialog id="modal" onclick="if(event.target===this)this.close()">
+  <div id="modal-body" onclick="event.stopPropagation()"></div>
+</dialog>
+{% endblock %}

@@ -11,8 +11,13 @@ dependencies = [
     "pydantic>=2.9.0",
     "pydantic-settings>=2.5.0",
     "python-frontmatter>=1.1.0",
-    "rich>=13.7",
-    "textual>=8.2.5",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "jinja2>=3.1",
+    "python-multipart>=0.0.12",
+    "itsdangerous>=2.2",
+    "argon2-cffi>=23.1",
+    "markdown>=3.10.2",
 ]
 
 [project.scripts]

@@ -7,6 +7,8 @@ from typing import Any
 
 from harness.client import EntityClient, cached_system
 from harness.config import Models, Settings
+from harness.knowledge.ask import try_ask
+from harness.knowledge.index import rebuild_index_if_stale
 from harness.memory.short_term import append_turn, recent_transcripts, start_session
 from harness.skills.loader import Skill, discover_skills
 from harness.skills.registry import execute, to_anthropic_tools
@@ -106,6 +108,18 @@ class Entity:
         assert self.transcript is not None, "Call begin_session() first."
         append_turn(self.transcript, "user", user_input)
         self.messages.append({"role": "user", "content": user_input})
+
+        if not self.in_birth:
+            fast_answer = try_ask(user_input, self.settings, self.system_text)
+            if fast_answer is not None:
+                if on_tool_use:
+                    on_tool_use("fast-ask")
+                on_text(fast_answer)
+                self.messages.append({"role": "assistant", "content": fast_answer})
+                append_turn(self.transcript, "assistant", fast_answer)
+                return fast_answer
+            if on_tool_use:
+                on_tool_use("sonnet")
 
         final_text = self._run_tool_loop(on_text=on_text, on_tool_use=on_tool_use)
         append_turn(self.transcript, "assistant", final_text)
@@ -243,6 +257,19 @@ class Entity:
             parts.append(
                 "Your long-term memory index. Use `manage_memory` with `action: read` to pull any entry in full.\n\n"
                 + index_text
+            )
+
+        rebuild_index_if_stale(self.settings.knowledge_dir)
+        knowledge_index_path = self.settings.knowledge_index_path
+        knowledge_text = (
+            knowledge_index_path.read_text(encoding="utf-8")
+            if knowledge_index_path.exists()
+            else ""
+        )
+        if knowledge_text.strip() and "(empty)" not in knowledge_text:
+            parts.append(
+                "Knowledge index — human-curated ground truth from Lucas. Use `query_knowledge` to pull entries in full before answering factual questions about him, the project, or his preferences.\n\n"
+                + knowledge_text
             )
         if include_recent_transcripts:
             recents = recent_transcripts(self.settings.short_term_dir, limit=2)

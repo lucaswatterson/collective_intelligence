@@ -7,9 +7,12 @@ import sys
 import threading
 import time
 
+import uvicorn
+
 from harness.bootstrap import bootstrap_entity
 from harness.config import Settings, load_settings
 from harness.entity import Entity
+from harness.knowledge.ask import ask as knowledge_ask
 from harness.runtime.lifecycle import (
     clear_pid_file,
     pid_alive,
@@ -18,7 +21,6 @@ from harness.runtime.lifecycle import (
 )
 from harness.runtime.status import FileBackedWorkerStatus, WorkerStatus
 from harness.runtime.worker import run_worker
-from harness.ui.tui import run_tui
 
 
 log = logging.getLogger(__name__)
@@ -61,61 +63,6 @@ def run_headless(settings: Settings) -> None:
         )
     finally:
         clear_pid_file(settings.worker_pid_path)
-
-
-def run_combined(settings: Settings) -> None:
-    write_pid_file(settings.worker_pid_path)
-    stop_event = threading.Event()
-    chat_entity = Entity(settings)
-    worker_entity = Entity(settings)
-    status = WorkerStatus(status_file=settings.worker_status_path)
-
-    worker_thread = threading.Thread(
-        target=run_worker,
-        args=(
-            worker_entity,
-            status,
-            stop_event,
-            settings.tasks_dir,
-            settings.responsibilities_dir,
-            settings.schedule_path,
-            settings.scheduler_tz,
-            settings.worker_poll_interval,
-        ),
-        daemon=True,
-        name="entity-worker",
-    )
-    worker_thread.start()
-
-    try:
-        run_tui(
-            chat_entity,
-            status,
-            stop_event,
-            settings.tasks_dir,
-            settings.schedule_path,
-            settings.scheduler_tz,
-        )
-    finally:
-        stop_event.set()
-        worker_thread.join(timeout=5)
-        clear_pid_file(settings.worker_pid_path)
-
-
-def run_tui_only(settings: Settings) -> None:
-    chat_entity = Entity(settings)
-    status = FileBackedWorkerStatus(settings.worker_status_path)
-    # Local event, not connected to the external worker. The TUI sets it on
-    # exit; nothing else listens, so the headless worker keeps running.
-    stop_event = threading.Event()
-    run_tui(
-        chat_entity,
-        status,
-        stop_event,
-        settings.tasks_dir,
-        settings.schedule_path,
-        settings.scheduler_tz,
-    )
 
 
 def cmd_worker_start(settings: Settings) -> None:
@@ -193,12 +140,23 @@ def cmd_worker_status(settings: Settings) -> None:
     print(f"step: {snap.step}  last tool: {last_tool}  started: {started}")
 
 
-def cmd_tui(settings: Settings) -> None:
-    if worker_already_running(settings.worker_pid_path) is not None:
-        log.info("attaching TUI to running worker")
-        run_tui_only(settings)
-    else:
-        run_combined(settings)
+def cmd_ask(settings: Settings, question: str) -> None:
+    answer = knowledge_ask(question, settings)
+    print(answer)
+
+
+def cmd_serve(settings: Settings, host: str, port: int) -> None:
+    if not settings.web_password_hash:
+        print(
+            "WEB_PASSWORD_HASH is not set in .env.\n"
+            "Generate one with: uv run python -m harness.web.auth hash <password>",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    from harness.web.app import create_app
+
+    app = create_app(settings)
+    uvicorn.run(app, host=host, port=port, log_level="info")
 
 
 def main() -> None:
@@ -212,7 +170,18 @@ def main() -> None:
     worker_sub.add_parser("status", help="Print worker liveness and current activity.")
     worker_sub.add_parser("_run", help=argparse.SUPPRESS)
 
-    sub.add_parser("tui", help="Run the TUI (combined if no worker; attach if one is running).")
+    serve = sub.add_parser(
+        "serve",
+        help="Run the web frontend (and an in-process worker if none is running).",
+    )
+    serve.add_argument("--host", default=None)
+    serve.add_argument("--port", type=int, default=None)
+
+    ask = sub.add_parser(
+        "ask",
+        help="Ask a factual question against entity/knowledge/ via a single Haiku call.",
+    )
+    ask.add_argument("question", nargs="+", help="The question to ask.")
 
     args = parser.parse_args()
 
@@ -230,8 +199,12 @@ def main() -> None:
             run_headless(settings)
         else:
             parser.error(f"unknown worker subcommand: {args.worker_cmd}")
-    elif args.cmd == "tui":
-        cmd_tui(settings)
+    elif args.cmd == "serve":
+        host = args.host or settings.web_host
+        port = args.port or settings.web_port
+        cmd_serve(settings, host, port)
+    elif args.cmd == "ask":
+        cmd_ask(settings, " ".join(args.question))
     else:
         parser.error(f"unknown command: {args.cmd}")
 

@@ -1,0 +1,61 @@
+<header class="modal-header">
+  <h2>{{ entry.name }}{% if not entry.enabled %} <span class="dim small">· disabled</span>{% endif %}</h2>
+  <button type="button" class="modal-close" onclick="document.getElementById('modal').close()">close</button>
+</header>
+
+<dl class="modal-meta">
+  <dt>responsibility</dt>
+  <dd>
+    {{ entry.responsibility }}{% if not entry.responsibility_exists %} <span class="warn small">· missing</span>{% endif %}
+  </dd>
+
+  {% if entry.cron %}
+  <dt>cron</dt>
+  <dd><code>{{ entry.cron }}</code></dd>
+  {% endif %}
+  {% if entry.interval %}
+  <dt>interval</dt>
+  <dd><code>{{ entry.interval }}</code></dd>
+  {% endif %}
+  {% if entry.guard %}
+  <dt>guard</dt>
+  <dd><code>{{ entry.guard }}</code></dd>
+  {% endif %}
+
+  <dt>next</dt>
+  <dd>
+    <span class="{% if entry.overdue %}warn{% endif %}">{{ entry.next_rel }}</span>
+    {% if entry.next_local != "—" %}<span class="dim small"> · {{ entry.next_local }}</span>{% endif %}
+  </dd>
+
+  <dt>last</dt>
+  <dd>
+    {{ entry.last_run_ago }}
+    {% if entry.last_run_iso %}<span class="dim small"> · {{ entry.last_run_local }}</span>{% endif %}
+  </dd>
+</dl>
+
+{% if entry.responsibility_html %}
+<section class="modal-section">
+  <h3>responsibility</h3>
+  <article class="modal-body">{{ entry.responsibility_html|safe }}</article>
+</section>
+{% elif entry.responsibility_exists %}
+<p class="dim">(responsibility file is empty)</p>
+{% else %}
+<p class="warn">responsibility file not found: <code>responsibilities/{{ entry.responsibility }}.md</code></p>
+{% endif %}
+
+{% if entry.recent %}
+<section class="modal-section">
+  <h3>recent runs</h3>
+  <ul class="modal-recent">
+    {% for r in entry.recent %}
+    <li>
+      <span>{{ r.title }}</span>
+      <span class="dim small"> · {{ r.ago }}</span>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}

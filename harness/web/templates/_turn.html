@@ -1,0 +1,8 @@
+<div class="msg user">{{ user_message }}</div>
+<div class="msg assistant"
+     hx-ext="sse"
+     sse-connect="/turn/stream/{{ token }}"
+     sse-swap="chunk"
+     hx-swap="beforeend"
+     sse-close="done">
+</div>
